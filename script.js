@@ -134,6 +134,7 @@ const defaultSettings = {
   showFdi: true,
   showToothName: true,
   showArch: true,
+  batteryLevel: 67,
   enabledGroups: Object.fromEntries(Object.keys(groupLabels).map((key) => [key, true])),
   thresholds: {
     tempWarn: 2,
@@ -167,6 +168,7 @@ const els = {
   displaySettings: document.querySelector("#displaySettings"),
   groupSettings: document.querySelector("#groupSettings"),
   thresholdSettings: document.querySelector("#thresholdSettings"),
+  batteryStatus: document.querySelector("#batteryStatus"),
   batteryText: document.querySelector("#batteryText")
 };
 
@@ -263,7 +265,10 @@ function renderSettings() {
     ["showArch", "ตำแหน่งขากรรไกร", "ฟันบนซ้าย ขวา ล่างซ้าย ขวา"]
   ];
 
-  els.displaySettings.innerHTML = displayRows.map(([key, label, detail]) => checkboxRow(key, label, detail, state.settings[key])).join("");
+  els.displaySettings.innerHTML = `
+    ${displayRows.map(([key, label, detail]) => checkboxRow(key, label, detail, state.settings[key])).join("")}
+    ${numberSettingRow("batteryLevel", "แบตเตอรี่อุปกรณ์จำลอง", "ตัวเลขที่แสดงบน header", "%", state.settings.batteryLevel)}
+  `;
 
   els.groupSettings.innerHTML = Object.entries(groupLabels).map(([key, label]) => (
     checkboxRow(`group-${key}`, label.th, label.en, state.settings.enabledGroups[key])
@@ -284,9 +289,19 @@ function renderSettings() {
     </div>
   `).join("");
 
-  els.displaySettings.querySelectorAll("input").forEach((input) => {
+  els.displaySettings.querySelectorAll("input[data-setting]").forEach((input) => {
     input.addEventListener("change", () => {
       state.settings[input.dataset.setting] = input.checked;
+      persistSettings();
+      updateUI();
+    });
+  });
+
+  els.displaySettings.querySelectorAll("input[data-number-setting]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const value = clampBatteryLevel(input.value);
+      state.settings[input.dataset.numberSetting] = value;
+      input.value = value;
       persistSettings();
       updateUI();
     });
@@ -322,6 +337,21 @@ function checkboxRow(key, label, detail, checked) {
         <small>${detail}</small>
       </label>
       <input id="${key}" type="checkbox" ${checked ? "checked" : ""} ${dataAttr}>
+    </div>
+  `;
+}
+
+function numberSettingRow(key, label, detail, unit, value) {
+  return `
+    <div class="number-row">
+      <label for="${key}">
+        ${label}
+        <small>${detail}</small>
+      </label>
+      <div class="number-control">
+        <input id="${key}" type="number" min="0" max="100" step="1" value="${clampBatteryLevel(value)}" data-number-setting="${key}" aria-label="${label} (${unit})">
+        <span>${unit}</span>
+      </div>
     </div>
   `;
 }
@@ -386,9 +416,11 @@ function updateCards() {
 
 function updateScenarioVisuals() {
   const scenario = scenarios[state.scenario];
+  const batteryLevel = `${clampBatteryLevel(state.settings.batteryLevel)}%`;
   els.scenarioBadge.textContent = scenario.label;
   els.simulationStatus.textContent = scenario.label;
-  els.batteryText.textContent = state.scenario === "noise" ? "54%" : "67%";
+  els.batteryText.textContent = batteryLevel;
+  els.batteryStatus.style.setProperty("--battery-level", batteryLevel);
 
   els.scenarioGrid.querySelectorAll(".scenario-card").forEach((button) => {
     button.classList.toggle("active", button.dataset.scenario === state.scenario);
@@ -618,6 +650,12 @@ function describeTooth(id) {
 
 function formatNumber(value) {
   return Number.isInteger(value) ? value.toString() : value.toFixed(1);
+}
+
+function clampBatteryLevel(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return defaultSettings.batteryLevel;
+  return Math.min(100, Math.max(0, Math.round(number)));
 }
 
 function loadSettings() {

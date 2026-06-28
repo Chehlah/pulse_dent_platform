@@ -132,6 +132,44 @@ button {
   box-shadow: 0 0 0 5px rgba(115, 240, 178, 0.18);
 }
 
+.battery-status {
+  --battery-level: 67%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 900;
+}
+
+.battery-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 24px;
+  height: 13px;
+  padding: 2px;
+  border: 2px solid rgba(255, 255, 255, 0.88);
+  border-radius: 4px;
+}
+
+.battery-icon::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: -5px;
+  width: 3px;
+  height: 5px;
+  border-radius: 0 2px 2px 0;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.battery-icon span {
+  display: block;
+  width: var(--battery-level);
+  height: 100%;
+  border-radius: 2px;
+  background: #73f0b2;
+}
+
 .tabbar {
   display: flex;
   gap: 8px;
@@ -654,16 +692,53 @@ tbody tr:last-child td {
   background: var(--paper);
 }
 
-.check-row label {
+.number-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+
+.check-row label,
+.number-row label {
   flex: 1;
   font-weight: 800;
 }
 
-.check-row small {
+.check-row small,
+.number-row small {
   display: block;
   margin-top: 2px;
   color: var(--muted);
   font-weight: 500;
+}
+
+.number-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.number-control input {
+  width: 82px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--paper);
+  font-weight: 900;
+  text-align: right;
+}
+
+.number-control span {
+  color: var(--muted);
+  font-weight: 900;
 }
 
 input[type="checkbox"] {
