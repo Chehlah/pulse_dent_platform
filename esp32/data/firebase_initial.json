@@ -1,8 +1,15 @@
 {
   "devices": {
     "pulse-dent-01": {
+      "control": {
+        "command": "stop"
+      },
+      "state": {
+        "measuring": false,
+        "lastSeen": 1795330000000
+      },
       "latest": {
-        "temperature": 36.8,
+        "temperature": 36.0,
         "unit": "C",
         "status": "online",
         "timestamp": 1795330000000

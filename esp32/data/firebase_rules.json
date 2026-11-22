@@ -1,0 +1,57 @@
+{
+  "rules": {
+    "devices": {
+      "$deviceId": {
+        ".read": true,
+        "control": {
+          ".write": "newData.hasChildren(['command']) && (newData.child('command').val() === 'start' || newData.child('command').val() === 'stop')",
+          "command": {
+            ".validate": "newData.isString() && (newData.val() === 'start' || newData.val() === 'stop')"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "state": {
+          ".write": "newData.hasChildren(['measuring', 'lastSeen'])",
+          "measuring": {
+            ".validate": "newData.isBoolean()"
+          },
+          "lastSeen": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "latest": {
+          ".write": "newData.hasChildren(['temperature', 'unit', 'timestamp'])",
+          "temperature": {
+            ".validate": "newData.isNumber() && newData.val() >= 20 && newData.val() <= 50"
+          },
+          "unit": {
+            ".validate": "newData.isString() && newData.val() === 'C'"
+          },
+          "status": {
+            ".validate": "newData.isString()"
+          },
+          "pulse": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 250"
+          },
+          "oxygen": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}

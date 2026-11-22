@@ -1,37 +1,68 @@
 # สรุปการทำงานของระบบ ESP32 (Pulse Dent 02)
 
-เอกสารนี้สรุปการทำงานปัจจุบันของเฟิร์มแวร์ ESP32 ในไฟล์ [`src/main.cpp`](src/main.cpp) และการตั้งค่าโปรเจกต์ใน [`platformio.ini`](platformio.ini)
+เอกสารนี้สรุปการทำงานของเฟิร์มแวร์ ESP32 ในไฟล์ [`src/main.cpp`](src/main.cpp), การตั้งค่าโปรเจกต์ใน [`platformio.ini`](platformio.ini) และโครงสร้าง Firebase Realtime Database สำหรับระบบควบคุม Toggle Start/Stop
 
 ---
 
 ## 1. ภาพรวมของระบบ (System Overview)
 
-บอร์ด **ESP32 (esp32dev)** ทำหน้าที่จำลองค่าอุณหภูมิร่างกายในช่วง **36.00 – 39.00 °C** และส่งข้อมูลแบบเรียลไทม์ขึ้นไปยัง **Firebase Realtime Database** ทุก ๆ รอบการทำงาน (1 วินาที) โดยมีระบบ **WiFiManager** ช่วยจัดการการตั้งค่า Wi-Fi ผ่านหน้าเว็บ (Captive Portal) โดยไม่ต้องแก้รหัส Wi-Fi ในโค้ด
+บอร์ด **ESP32 (esp32dev)** เชื่อมต่อ Wi-Fi ด้วย **WiFiManager** และทำงานในระบบควบคุมการวัดแบบ **Toggle Start/Stop ได้ 2 ช่องทาง (Two-Way Control)** ทั้งจาก **ปุ่มกดจริงบนบอร์ด ESP32 (Push Button Module ที่ GPIO 18)** และจาก **ปุ่มบนหน้า Web App** ผ่าน **Firebase Realtime Database**:
+- **การต่อสาย Push Button Module แบบ 3 ขา (Active LOW):**
+  - `S` (Signal) $\rightarrow$ **GPIO 18** (`pinMode(18, INPUT_PULLUP)`)
+  - `+` (VCC) $\rightarrow$ **3V3**
+  - `-` (GND) $\rightarrow$ **GND**
+  - ใช้ระบบ **Debounce 50 ms** ด้วย `millis()` ล้วน (ไม่มีการใช้ `delay()` ในโค้ด)
+- เมื่อเปิดเครื่องหรือเชื่อมต่อ Wi-Fi ใหม่ บอร์ดจะเริ่มต้นในโหมด **Standby (`isMeasuring = false`)** และรีเซ็ตคำสั่งใน Firebase (`control/command = "stop"`, `state/measuring = false`) เพื่อป้องกันคำสั่ง `start` เก่าที่ค้างอยู่ทำให้เริ่มวัดเอง
+- ใช้ `millis()` แทน `delay()` ในการแบ่งรอบทำงานแบบ Non-blocking:
+  1. **ตรวจจับการกดปุ่ม GPIO 18 (`handlePhysicalButton`)** ตลอดเวลาพร้อม Debounce 50 ms เมื่อกดปุ่มจะสลับสถานะ Start/Stop ทันที และซิงก์ทั้ง `control/command` และ `state/measuring` ขึ้น Firebase เพื่อให้หน้า Web App อัปเดตตรงกัน
+  2. **อ่านคำสั่ง (`control/command`)** จาก Firebase ทุก **1 วินาที** เพื่อรับคำสั่งกรณีผู้ใช้กดปุ่มจากหน้า Web App
+  3. **จำลองอุณหภูมิ (36.0 – 39.0 °C ขยับทีละ ±0.2 °C) และส่งค่า (`latest`)** ทุก **1 วินาที** เฉพาะเมื่อ `isMeasuring = true` เท่านั้น
+  4. **ส่ง Heartbeat (`state/lastSeen` และ `state/measuring`)** ทุก **3 วินาที** อย่างต่อเนื่องทั้งในโหมด Standby และ Measuring เพื่อให้ Web App ตรวจสอบสถานะ Online/Offline ได้ตลอดเวลา
 
 ---
 
-## 2. แผนผังลำดับการทำงาน (Workflow Diagram)
+## 2. โครงสร้างข้อมูลใน Firebase Realtime Database
+
+```text
+devices/pulse-dent-01/
+├── control/
+│   └── command: "stop" | "start"
+├── state/
+│   ├── measuring: false | true
+│   └── lastSeen: timestamp
+└── latest/
+    ├── temperature: 36.0
+    ├── unit: "C"
+    ├── status: "online"
+    └── timestamp: timestamp
+```
+
+- **Web App** เขียนคำสั่ง `"start"` หรือ `"stop"` ไปที่ `control/command`
+- **ESP32** อ่าน `control/command` แล้วอัปเดตสถานะจริงกลับไปที่ `state/measuring` ทันที
+- **ESP32** อัปเดต `latest/temperature` เฉพาะขณะที่ `isMeasuring == true`
+- ดูโครงสร้างเริ่มต้นได้ที่ [`data/firebase_initial.json`](data/firebase_initial.json) และกฎความปลอดภัยได้ที่ [`data/firebase_rules.json`](data/firebase_rules.json)
+
+---
+
+## 3. แผนผังลำดับการทำงาน (Workflow Diagram)
 
 ```mermaid
 flowchart TD
     A["เปิดเครื่อง ESP32 (setup)"] --> B["เริ่ม Serial Monitor (115200 baud)"]
-    B --> C["WiFiManager พยายามต่อ Wi-Fi เดิม (Timeout 15 วินาที)"]
-    C -->|เชื่อมต่อสำเร็จ| D["แสดง SSID และ IP Address"]
-    C -->|เชื่อมต่อไม่ได้| E["เปิด AP: PulseDent-Setup (รหัส: pulsedent02)"]
-    E -->|ตั้งค่าสำเร็จภายใน 180 วินาที| D
-    E -->|หมดเวลา 180 วินาที| F["เข้าสู่โหมด Offline"]
-    D --> G["เข้าสู่การทำงานหลัก (loop)"]
-    F --> G
-    G --> H["คำนวณค่าอุณหภูมิจำลอง (36.0 - 39.0 °C, ขยับทีละ ±0.2 °C)"]
-    H --> I["แสดงค่าอุณหภูมิทาง Serial Monitor"]
-    I --> J{"เช็คสถานะ Wi-Fi"}
-    J -->|Connected| K["ส่ง HTTP PUT ไปยัง Firebase Realtime Database"]
-    J -->|Disconnected| L["ข้ามการส่งข้อมูล (แสดง WiFi: Disconnected)"]
-    K --> M["แสดงรหัสตอบกลับ (Firebase HTTP status)"]
-    M --> N["หน่วงเวลา 1 วินาที (delay 1000 ms)"]
-    L --> N
-    N --> G
+    B --> C["WiFiManager เชื่อมต่อ Wi-Fi เดิม (Timeout 15s) หรือเปิด AP PulseDent-Setup"]
+    C -->|เชื่อมต่อสำเร็จ| D["ตั้งค่าเริ่มต้น Standby: เขียน control/command = 'stop' และ state/measuring = false"]
+    C -->|หมดเวลา 180s| E["รันต่อและพยายาม Reconnect อัตโนมัติทุก 5 วินาที"]
+    D --> F["เข้าสู่การทำงานหลัก (loop ด้วย millis)"]
+    E --> F
+    F --> G["ทุก 1 วินาที: อ่าน control/command จาก Firebase"]
+    G -->|รับคำสั่ง 'start'| H["isMeasuring = true + ยืนยัน state/measuring = true + ส่งอุณหภูมิทันที"]
+    G -->|รับคำสั่ง 'stop'| I["isMeasuring = false + ยืนยัน state/measuring = false + หยุดส่งอุณหภูมิทันที"]
+    F --> J{"isMeasuring == true และครบ 1 วินาที?"}
+    J -->|ใช่| K["จำลองอุณหภูมิ 36.0-39.0 °C (±0.2 °C) และ PUT ไปยัง latest.json"]
+    J -->|ไม่ใช่| L["คงสถานะ Standby (ไม่จำลองและไม่ส่งอุณหภูมิ)"]
+    F --> M["ทุก 3 วินาที: ส่ง Heartbeat (state/measuring และ state/lastSeen)"]
 ```
+
 
 ---
 

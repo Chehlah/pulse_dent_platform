@@ -526,12 +526,76 @@ button {
   background: var(--green);
 }
 
+.live-pill.measuring {
+  background: var(--blue);
+}
+
+.live-pill.standby {
+  background: var(--teal);
+}
+
+.live-pill.pending {
+  background: var(--orange);
+}
+
 .live-pill.stale {
   background: var(--orange);
 }
 
 .live-pill.offline {
   background: var(--gray);
+}
+
+.command-error-banner {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(201, 54, 54, 0.35);
+  border-radius: var(--radius);
+  background: #fff3f3;
+  color: var(--red);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.measure-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 142px;
+  min-height: 40px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: var(--radius);
+  color: #fff;
+  font-size: 0.94rem;
+  font-weight: 900;
+  transition: background 160ms ease, opacity 160ms ease, transform 120ms ease;
+}
+
+.measure-toggle-btn.start {
+  background: var(--green);
+  box-shadow: 0 4px 12px rgba(19, 162, 92, 0.25);
+}
+
+.measure-toggle-btn.stop {
+  background: var(--orange);
+  box-shadow: 0 4px 12px rgba(243, 154, 35, 0.28);
+}
+
+.measure-toggle-btn.pending {
+  background: var(--teal);
+}
+
+.measure-toggle-btn:disabled,
+.primary-button:disabled,
+.secondary-button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.live-temp-value.standby-value {
+  color: var(--muted);
 }
 
 .live-toggle-wrap {
