@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PulseDent Platform — เลือกโหมดการใช้งาน</title>
+    <link rel="icon" href="data:,">
+    <style>
+      :root {
+        --ink: #17262c;
+        --muted: #586a73;
+        --line: #d7e2e4;
+        --teal: #078291;
+        --teal-dark: #075f6b;
+        --blue: #0969b8;
+        --green: #13a25c;
+        --orange: #f39a23;
+        --radius: 12px;
+        --shadow: 0 18px 50px rgba(12, 64, 72, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Thai", sans-serif;
+        background:
+          linear-gradient(145deg, rgba(7, 130, 145, 0.18), rgba(9, 105, 184, 0.08) 34%, rgba(19, 162, 92, 0.12)),
+          #eef7f6;
+      }
+
+      .portal-shell {
+        width: min(880px, 100%);
+        border: 1px solid rgba(7, 130, 145, 0.2);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .portal-header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 26px 28px;
+        color: #fff;
+        background: linear-gradient(90deg, #087987, #057482 56%, #0969b8);
+      }
+
+      .brand-mark {
+        display: grid;
+        flex: 0 0 56px;
+        width: 56px;
+        height: 56px;
+        place-items: center;
+        border: 2px solid rgba(255, 255, 255, 0.85);
+        border-radius: 50%;
+        font-size: 1.6rem;
+        font-weight: 800;
+      }
+
+      .portal-header h1 {
+        margin: 0;
+        font-size: clamp(1.6rem, 3.5vw, 2.3rem);
+        line-height: 1.1;
+      }
+
+      .portal-header p {
+        margin: 4px 0 0;
+        opacity: 0.92;
+        font-size: 0.95rem;
+      }
+
+      .eyebrow {
+        margin: 0 0 4px;
+        font-size: 0.76rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        opacity: 0.9;
+      }
+
+      .portal-body {
+        padding: 28px;
+      }
+
+      .portal-intro {
+        margin: 0 0 20px;
+        color: var(--muted);
+        font-size: 1rem;
+      }
+
+      .mode-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+        gap: 18px;
+      }
+
+      .mode-card {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 22px;
+        border: 2px solid var(--line);
+        border-radius: var(--radius);
+        background: #fff;
+        text-decoration: none;
+        color: inherit;
+        transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+      }
+
+      .mode-card:hover,
+      .mode-card:focus-visible {
+        transform: translateY(-3px);
+        border-color: var(--teal);
+        box-shadow: 0 12px 30px rgba(7, 130, 145, 0.16);
+        outline: none;
+      }
+
+      .mode-card.primary {
+        border-color: rgba(9, 105, 184, 0.45);
+        background: linear-gradient(145deg, #f5fbff, #ffffff);
+      }
+
+      .badge {
+        display: inline-flex;
+        align-self: flex-start;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 11px;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 800;
+        color: #fff;
+        margin-bottom: 12px;
+      }
+
+      .badge.live {
+        background: var(--blue);
+      }
+
+      .badge.demo {
+        background: var(--teal);
+      }
+
+      .mode-card h2 {
+        margin: 0 0 8px;
+        font-size: 1.28rem;
+        color: var(--teal-dark);
+      }
+
+      .mode-card p {
+        margin: 0 0 18px;
+        color: var(--muted);
+        font-size: 0.94rem;
+        line-height: 1.5;
+      }
+
+      .cta-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-weight: 800;
+        color: #fff;
+        background: var(--blue);
+      }
+
+      .mode-card.demo-card .cta-button {
+        background: var(--teal);
+      }
+
+      .portal-footer {
+        margin-top: 22px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.85rem;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="portal-shell">
+      <header class="portal-header">
+        <span class="brand-mark" aria-hidden="true">P</span>
+        <div>
+          <p class="eyebrow">PulseDent Platform</p>
+          <h1>PULSE DENT</h1>
+          <p>Smart Dental Pulp Vitality Assessment Device and Platform</p>
+          <p>พัลส์เดนต์: อุปกรณ์อัจฉริยะสำหรับประเมินภาวะโพรงประสาทฟันตายร่วมกับแพลตฟอร์มดิจิทัล</p>
+        </div>
+      </header>
+
+      <section class="portal-body">
+        <p class="portal-intro">กรุณาเลือกโหมดเว็บแอปพลิเคชันที่ต้องการเข้าใช้งาน:</p>
+
+        <div class="mode-grid">
+          <a class="mode-card primary" href="./web_app/index.html">
+            <div>
+              <span class="badge live">● Real-time ESP32 + Firebase</span>
+              <h2>PulseDent Web App (เชื่อมต่อ ESP32)</h2>
+              <p>
+                เชื่อมต่อและรับค่าอุณหภูมิแบบเรียลไทม์จากบอร์ด ESP32 ผ่าน Firebase Realtime Database
+                สามารถคลิกเลือกซี่ฟันบนแผนผังเพื่อนำค่าจากเซ็นเซอร์ไปประมวลผลและเปรียบเทียบความเสี่ยงได้ทันที
+              </p>
+            </div>
+            <span class="cta-button">เปิดใช้งาน Web App (ESP32) →</span>
+          </a>
+
+          <a class="mode-card demo-card" href="./web_demo/index.html">
+            <div>
+              <span class="badge demo">Simulation Mode</span>
+              <h2>PulseDent Web Demo (โหมดสาธิตจำลอง)</h2>
+              <p>
+                ระบบจำลองสำหรับการนำเสนอและสาธิตสถานการณ์ต่าง ๆ (ฟันปกติ, เฝ้าระวัง, เสี่ยงสูง, โพรงประสาทฟันตาย)
+                โดยไม่ต้องเปิดเครื่อง ESP32
+              </p>
+            </div>
+            <span class="cta-button">เปิดใช้งาน Web Demo (จำลอง) →</span>
+          </a>
+        </div>
+
+        <footer class="portal-footer">
+          <span>ผลลัพธ์บนเว็บเป็นการประเมินเบื้องต้น ควรตรวจยืนยันโดยทันตแพทย์</span>
+          <span>PulseDent Platform</span>
+        </footer>
+      </section>
+    </main>
+  </body>
+</html>
