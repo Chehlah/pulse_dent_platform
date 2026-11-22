@@ -53,26 +53,27 @@ PulseDent/
 │
 └── esp32/                      # โปรเจกต์เฟิร์มแวร์ ESP32 (PlatformIO / Arduino Framework)
     ├── platformio.ini          # ตั้งค่าบอร์ด esp32dev และไลบรารี WiFiManager
-    ├── src/main.cpp            # โค้ดอ่าน/จำลองค่าอุณหภูมิและส่ง HTTP PUT ขึ้น Firebase ทุก 1 วินาที
+    ├── src/main.cpp            # โค้ดควบคุม Toggle Start/Stop 2 ช่องทาง (ปุ่ม GPIO 18 + Web App), ส่ง Heartbeat และส่งอุณหภูมิขึ้น Firebase
     ├── data/firebase_initial.json # โครงสร้าง JSON เริ่มต้นสำหรับ Firebase Realtime Database
-    ├── ESP32_OPERATION_SUMMARY.md # สรุปการทำงานของเฟิร์มแวร์ ESP32
-    └── plan_PulseDent02_ESP32_Firebase.md # คู่มือการเชื่อมต่อ ESP32 กับ Firebase
+    ├── data/firebase_rules.json   # กฎความปลอดภัย (Security Rules) สำหรับ Firebase Realtime Database
+    └── ESP32_OPERATION_SUMMARY.md # สรุปการทำงานของเฟิร์มแวร์ ESP32
 ```
 
 ---
 
 ## ✨ ฟีเจอร์หลักของ `web_app` (ESP32 + Firebase Integration)
 
-1. **การรับค่าแบบ Real-time จาก ESP32 ผ่าน Firebase (`#liveSensorCard`):**
-   - ซิงก์ข้อมูลจาก Path `/devices/<deviceId>/latest.json` ด้วยทั้ง **Server-Sent Events (SSE)** และ **HTTP Polling**
-   - ตรวจสอบความสดของข้อมูลจาก `timestamp` ของเซิร์ฟเวอร์ Firebase เพื่อแสดงสถานะการเชื่อมต่อของบอร์ด ESP32 ตามจริง:
-     - 🟢 **ESP32 เชื่อมต่อสำเร็จ (`online`):** มีข้อมูลชุดใหม่อัปเดตภายใน 6 วินาทีล่าสุด
-     - 🟡 **ESP32 สัญญาณไม่อัปเดต (`stale`):** ข้อมูลค้างเกิน 6–15 วินาที
-     - ⚪ **ESP32 ออฟไลน์ (`offline`):** ข้อมูลไม่อัปเดตเกิน 15 วินาที หรือปิดการรับค่าจาก ESP32
+1. **การควบคุมการวัดแบบ 2 ช่องทาง และการรับค่า Real-time จาก ESP32 ผ่าน Firebase (`#liveSensorCard`):**
+   - ซิงก์ข้อมูลจาก Path `/devices/<deviceId>.json` (`control`, `state`, `latest`) ด้วยทั้ง **Server-Sent Events (SSE)** และ **HTTP Polling**
+   - สั่ง **เริ่มการวัด (Start) / หยุดการวัด (Stop)** ได้ทั้งจากปุ่มบนหน้าเว็บ (`/devices/<deviceId>/control/command.json`) และจากปุ่มกดจริงบนบอร์ด ESP32 (**GPIO 18**) โดยซิงก์สถานะ `Standby` / `Measuring` ตรงกันแบบ Real-time
+   - ตรวจสอบความสดของสัญญาณจาก `state/lastSeen` (Heartbeat ทุก 3 วินาที) และ `latest/timestamp` เพื่อแยกแสดงสถานะการเชื่อมต่อและการวัดตามจริง:
+     - 🟢 **Online (`Measuring` / `Standby`):** มี Heartbeat หรือข้อมูลชุดใหม่อัปเดตภายใน 6 วินาทีล่าสุด
+     - 🟡 **สัญญาณไม่อัปเดต (`stale`):** ข้อมูล/Heartbeat ค้างเกิน 6–12 วินาที
+     - ⚪ **Offline (`ไม่พร้อมวัด`):** ข้อมูล/Heartbeat ไม่อัปเดตเกิน 12 วินาที หรือปิดการรับค่าจาก ESP32
 
 2. **การส่งค่าจาก ESP32 เข้าซี่ฟันบนแผนผัง (Interactive Dental Map):**
    - คลิกเลือกฟันซี่ใดก็ได้จาก 32 ซี่ (ระบบ FDI 11–48) ทั้งในโหมด **พื้นที่อ้างอิง (สีเขียว)** และ **พื้นที่เป้าหมาย (สีส้ม)**
-   - รองรับโหมด **Auto-Assign (Real-time)** ที่ส่งค่าอุณหภูมิสดจาก ESP32 เข้าซี่ฟันที่คลิกเลือกทันที พร้อมปุ่ม **ล็อกค่าฟันแล้วสลับโหมด** เพื่อวัดฟันอ้างอิงและฟันเป้าหมายเปรียบเทียบกันได้อย่างรวดเร็ว
+   - รองรับทั้งการกดปุ่ม **นำค่านี้ไปใส่ฟันที่เลือก**, ปุ่ม **ล็อกค่าฟันแล้วสลับโหมด** เพื่อวัดฟันอ้างอิงและฟันเป้าหมายเปรียบเทียบกัน และการเปิดโหมด **Auto-Assign (Real-time)** ขณะกำลังวัด
 
 3. **การคำนวณผลต่างและประเมินความเสี่ยงอัตโนมัติ:**
    - คำนวณผลต่างสัมบูรณ์ของอุณหภูมิ ชีพจร และออกซิเจนระหว่างฟันอ้างอิงกับฟันเป้าหมาย
