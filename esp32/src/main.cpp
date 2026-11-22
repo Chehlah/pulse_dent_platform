@@ -12,11 +12,25 @@ const char* DEVICE_ID = "pulse-dent-01";
 String firebaseIdToken = "";
 
 // ตั้งค่า Push Button Module แบบ 3 ขา (Active LOW: S -> GPIO 18, + -> 3V3, - -> GND)
+// ใช้ทั้ง Hardware Interrupt (FALLING edge) และ Digital Debounce เพื่อให้กดติดทันทีแม้กำลังส่ง HTTPS
 const int BUTTON_PIN = 18;
 const unsigned long DEBOUNCE_DELAY_MS = 50;
+const unsigned long ISR_LOCKOUT_MS    = 200; // ป้องกันสัญญาณกระเพื่อม (Bounce) ในระดับ Interrupt
 int lastButtonReading = HIGH;
 int stableButtonState = HIGH;
 unsigned long lastDebounceTime = 0;
+
+volatile bool buttonInterruptPending = false;
+volatile unsigned long lastIsrTriggerMillis = 0;
+unsigned long lastAppliedToggleMillis = 0;
+
+void IRAM_ATTR onButtonFallingISR() {
+    unsigned long now = millis();
+    if (now - lastIsrTriggerMillis >= ISR_LOCKOUT_MS) {
+        lastIsrTriggerMillis = now;
+        buttonInterruptPending = true;
+    }
+}
 
 // สถานะการวัดและตัวแปรจำลองอุณหภูมิ (36.0 - 39.0 C, ขยับทีละ +-0.2 C)
 bool isMeasuring = false;
@@ -174,10 +188,28 @@ void applyMeasurementState(bool newState, bool triggeredByPhysicalButton) {
     }
 }
 
-// ตรวจจับการกดปุ่ม Push Button (GPIO 18, Active LOW) พร้อมระบบ Debounce 50 ms แบบไม่ใช้ delay()
+// ตรวจจับการกดปุ่ม Push Button (GPIO 18, Active LOW) ด้วย Hardware Interrupt ร่วมกับ Debounce 50 ms แบบไม่ใช้ delay()
 void handlePhysicalButton() {
-    int reading = digitalRead(BUTTON_PIN);
     unsigned long now = millis();
+    bool triggerToggle = false;
+
+    // 1. ตรวจสอบสัญญาณจาก Hardware Interrupt (ดักจับการกดปุ่มได้แม้เกิดระหว่างรอ HTTPS Request)
+    if (buttonInterruptPending) {
+        noInterrupts();
+        buttonInterruptPending = false;
+        interrupts();
+
+        if (now - lastAppliedToggleMillis >= ISR_LOCKOUT_MS) {
+            triggerToggle = true;
+            // อัปเดตสถานะ Polling ให้ตรงกันเพื่อไม่ให้ทริกเกอร์ซ้ำเมื่อปล่อยหรือกดค้าง
+            lastButtonReading = digitalRead(BUTTON_PIN);
+            stableButtonState = LOW;
+            lastDebounceTime  = now;
+        }
+    }
+
+    // 2. ตรวจสอบสถานะขาด้วย Polling Debounce 50 ms ควบคู่กันเพื่อความแม่นยำของสถานะปุ่ม
+    int reading = digitalRead(BUTTON_PIN);
 
     if (reading != lastButtonReading) {
         lastDebounceTime = now;
@@ -188,11 +220,16 @@ void handlePhysicalButton() {
         if (reading != stableButtonState) {
             stableButtonState = reading;
 
-            // Active LOW: เมื่อกดปุ่มลง (Falling Edge -> LOW) ให้สลับสถานะ Start / Stop
-            if (stableButtonState == LOW) {
-                applyMeasurementState(!isMeasuring, true);
+            // Active LOW: เมื่อกดปุ่มลง (Falling Edge -> LOW) และยังไม่ถูกทริกเกอร์โดย ISR ในรอบเดียวกัน
+            if (stableButtonState == LOW && (now - lastAppliedToggleMillis >= ISR_LOCKOUT_MS)) {
+                triggerToggle = true;
             }
         }
+    }
+
+    if (triggerToggle) {
+        lastAppliedToggleMillis = now;
+        applyMeasurementState(!isMeasuring, true);
     }
 }
 
@@ -267,14 +304,15 @@ void simulateNextTemperature() {
 void setup() {
     Serial.begin(115200);
 
-    // ตั้งค่าขา Push Button Module (GPIO 18, Active LOW) ด้วย INPUT_PULLUP
+    // ตั้งค่าขา Push Button Module (GPIO 18, Active LOW) ด้วย INPUT_PULLUP และผูก Hardware Interrupt
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     lastButtonReading = digitalRead(BUTTON_PIN);
     stableButtonState = lastButtonReading;
     lastDebounceTime  = millis();
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonFallingISR, FALLING);
 
     Serial.println("Pulse Dent 02");
-    Serial.println("Physical Button configured on GPIO 18 (INPUT_PULLUP, Active LOW, Debounce 50 ms)");
+    Serial.println("Physical Button configured on GPIO 18 (INPUT_PULLUP + Hardware Interrupt FALLING, Debounce 50 ms)");
     Serial.println("Starting WiFi Manager...");
 
     WiFi.mode(WIFI_STA);

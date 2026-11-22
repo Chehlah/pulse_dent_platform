@@ -11,10 +11,10 @@
   - `S` (Signal) $\rightarrow$ **GPIO 18** (`pinMode(18, INPUT_PULLUP)`)
   - `+` (VCC) $\rightarrow$ **3V3**
   - `-` (GND) $\rightarrow$ **GND**
-  - ใช้ระบบ **Debounce 50 ms** ด้วย `millis()` ล้วน (ไม่มีการใช้ `delay()` ในโค้ด)
+  - ใช้ระบบ **Hardware Interrupt (`attachInterrupt` แบบ `FALLING` edge)** ร่วมกับ **Digital Debounce 50 ms** และตัวล็อกกันสัญญาณกระเพื่อมระดับ Interrupt (`ISR_LOCKOUT_MS = 200 ms`) ด้วย `millis()` ล้วน (ไม่มีการใช้ `delay()` ในโค้ด) ทำให้ตรวจจับการกดปุ่มได้ทันทีแม้บอร์ดกำลังส่งข้อมูลผ่าน HTTPS ไปยัง Firebase
 - เมื่อเปิดเครื่องหรือเชื่อมต่อ Wi-Fi ใหม่ บอร์ดจะเริ่มต้นในโหมด **Standby (`isMeasuring = false`)** และรีเซ็ตคำสั่งใน Firebase (`control/command = "stop"`, `state/measuring = false`) เพื่อป้องกันคำสั่ง `start` เก่าที่ค้างอยู่ทำให้เริ่มวัดเอง
 - ใช้ `millis()` แทน `delay()` ในการแบ่งรอบทำงานแบบ Non-blocking:
-  1. **ตรวจจับการกดปุ่ม GPIO 18 (`handlePhysicalButton`)** ตลอดเวลาพร้อม Debounce 50 ms เมื่อกดปุ่มจะสลับสถานะ Start/Stop ทันที และซิงก์ทั้ง `control/command` และ `state/measuring` ขึ้น Firebase เพื่อให้หน้า Web App อัปเดตตรงกัน
+  1. **ตรวจจับการกดปุ่ม GPIO 18 (`onButtonFallingISR` + `handlePhysicalButton`)** ตลอดเวลาด้วย Hardware Interrupt และ Debounce 50 ms เมื่อกดปุ่มจะสลับสถานะ Start/Stop ทันที และซิงก์ทั้ง `control/command` และ `state/measuring` ขึ้น Firebase เพื่อให้หน้า Web App อัปเดตตรงกัน
   2. **อ่านคำสั่ง (`control/command`)** จาก Firebase ทุก **1 วินาที** เพื่อรับคำสั่งกรณีผู้ใช้กดปุ่มจากหน้า Web App
   3. **จำลองอุณหภูมิ (36.0 – 39.0 °C ขยับทีละ ±0.2 °C) และส่งค่า (`latest`)** ทุก **1 วินาที** เฉพาะเมื่อ `isMeasuring = true` เท่านั้น
   4. **ส่ง Heartbeat (`state/lastSeen` และ `state/measuring`)** ทุก **3 วินาที** อย่างต่อเนื่องทั้งในโหมด Standby และ Measuring เพื่อให้ Web App ตรวจสอบสถานะ Online/Offline ได้ตลอดเวลา
@@ -48,12 +48,14 @@ devices/pulse-dent-01/
 
 ```mermaid
 flowchart TD
-    A["เปิดเครื่อง ESP32 (setup)"] --> B["เริ่ม Serial Monitor (115200 baud)"]
+    A["เปิดเครื่อง ESP32 (setup)"] --> B["เริ่ม Serial Monitor (115200 baud) + ตั้งค่า GPIO 18 (INPUT_PULLUP + attachInterrupt FALLING)"]
     B --> C["WiFiManager เชื่อมต่อ Wi-Fi เดิม (Timeout 15s) หรือเปิด AP PulseDent-Setup"]
     C -->|เชื่อมต่อสำเร็จ| D["ตั้งค่าเริ่มต้น Standby: เขียน control/command = 'stop' และ state/measuring = false"]
     C -->|หมดเวลา 180s| E["รันต่อและพยายาม Reconnect อัตโนมัติทุก 5 วินาที"]
     D --> F["เข้าสู่การทำงานหลัก (loop ด้วย millis)"]
     E --> F
+    F --> P["ตรวจจับปุ่มกด GPIO 18 (Hardware Interrupt ISR + Debounce 50ms)"]
+    P -->|กดปุ่ม (Falling Edge)| Q["สลับสถานะ Start/Stop + ซิงก์ control/command และ state/measuring ขึ้น Firebase"]
     F --> G["ทุก 1 วินาที: อ่าน control/command จาก Firebase"]
     G -->|รับคำสั่ง 'start'| H["isMeasuring = true + ยืนยัน state/measuring = true + ส่งอุณหภูมิทันที"]
     G -->|รับคำสั่ง 'stop'| I["isMeasuring = false + ยืนยัน state/measuring = false + หยุดส่งอุณหภูมิทันที"]
@@ -70,7 +72,8 @@ flowchart TD
 
 ### 3.1 การตั้งค่าเริ่มต้นและการเชื่อมต่อ Wi-Fi (`setup()`)
 1. เริ่มต้นพอร์ตสื่อสาร `Serial` ที่ความเร็ว **115200 baud**
-2. เรียกใช้ไลบรารี `WiFiManager`:
+2. ตั้งค่าขาปุ่มกด **GPIO 18** เป็น `INPUT_PULLUP` พร้อมผูก **Hardware Interrupt** (`attachInterrupt(digitalPinToInterrupt(18), onButtonFallingISR, FALLING)`) เพื่อดักจับจังหวะกดปุ่มในระดับฮาร์ดแวร์ได้ตลอดเวลา
+3. เรียกใช้ไลบรารี `WiFiManager`:
    - **พยายามเชื่อมต่อ Wi-Fi เดิมอัตโนมัติ** เป็นเวลาสูงสุด **15 วินาที** (`wm.setConnectTimeout(15)`)
    - **หากเชื่อมต่อไม่ได้** บอร์ดจะปล่อยสัญญาณ Wi-Fi Access Point:
      - **ชื่อ Wi-Fi (SSID):** `PulseDent-Setup`
@@ -79,12 +82,16 @@ flowchart TD
    - หากเชื่อมต่อสำเร็จ จะแสดงชื่อ Wi-Fi (`SSID`) และ `IP Address` ออกทาง Serial Monitor
    - หากครบ 3 นาทีแล้วยังไม่ได้ตั้งค่า บอร์ดจะแสดง `Running offline...` และทำงานต่อใน `loop()` โดยไม่ค้าง
 
-### 3.2 การจำลองค่าอุณหภูมิ (`loop()`)
+### 3.2 ระบบตรวจจับการกดปุ่มจริงบนบอร์ด (`onButtonFallingISR()` และ `handlePhysicalButton()`)
+- **Hardware Interrupt (`IRAM_ATTR onButtonFallingISR`)**: ทำงานในหน่วยความจำ IRAM ทันทีที่แรงดันที่ขา GPIO 18 ตกจาก `HIGH` เป็น `LOW` (`FALLING` edge) แม้ในขณะนั้นบอร์ดจะกำลังรอ HTTPS Response จาก Firebase อยู่ พร้อมตัวล็อกกันสัญญาณกระเพื่อมเบื้องต้น (`ISR_LOCKOUT_MS = 200 ms`)
+- **Digital Debounce & State Sync (`handlePhysicalButton`)**: ตรวจสอบทั้งแฟล็ก `buttonInterruptPending` จาก Interrupt และการอ่านค่า `digitalRead(18)` แบบ Debounce `50 ms` ร่วมกัน เมื่อตรวจพบการกดปุ่มจะเรียก `applyMeasurementState(!isMeasuring, true)` เพื่อสลับสถานะ Start/Stop และอัปเดตทั้ง `control/command` และ `state/measuring` บน Firebase ทันที
+
+### 3.3 การจำลองค่าอุณหภูมิ (`loop()`)
 - เริ่มต้นที่ `36.0 °C` และเปลี่ยนแปลงรอบละ `0.2 °C`
 - **ขาขึ้น:** เพิ่มทีละ `+0.2 °C` จนถึง `39.0 °C`
 - **ขาลง:** เมื่อแตะ `39.0 °C` จะสลับเป็นลดลงทีละ `-0.2 °C` จนกลับมาที่ `36.0 °C` แล้วสลับขึ้นใหม่วนไปเรื่อย ๆ
 
-### 3.3 การส่งข้อมูลไปยัง Firebase (`sendTemperature()`)
+### 3.4 การส่งข้อมูลไปยัง Firebase (`sendTemperature()`)
 เมื่อ Wi-Fi เชื่อมต่ออยู่ (`WL_CONNECTED`) บอร์ดจะส่งข้อมูลผ่าน HTTPS (`WiFiClientSecure` + `HTTPClient`):
 - **Method:** `HTTP PUT` (เขียนทับข้อมูลล่าสุดที่ตำแหน่งเดิม ไม่สร้างรายการซ้ำ)
 - **Database URL:** `https://pulsedent-02-default-rtdb.asia-southeast1.firebasedatabase.app`
@@ -108,18 +115,17 @@ flowchart TD
 
 ```text
 Pulse Dent 02
+Physical Button configured on GPIO 18 (INPUT_PULLUP + Hardware Interrupt FALLING, Debounce 50 ms)
 Starting WiFi Manager...
 WiFi Connected!
 SSID: Your_WiFi_Name
 IP: 192.168.1.105
-Temperature: 36.20 C
-WiFi: Connected
-Firebase HTTP status: 200
-----------------
-Temperature: 36.40 C
-WiFi: Connected
-Firebase HTTP status: 200
-----------------
+Initializing device state to Standby (stop)...
+Standby initialized on Firebase (measuring: false, command: stop)
+>>> [GPIO 18 Button] Measurement state changed to: MEASURING (START)
+Send temperature (36.00 C) -> OK
+Send temperature (36.20 C) -> OK
+Heartbeat sent [mode: Measuring]
 ```
 
 ### ความหมายของรหัส `Firebase HTTP status`:
