@@ -161,7 +161,7 @@ const state = {
   history: loadHistory(),
   live: {
     enabled: true,
-    autoAssign: true, // true: คลิกฟันซี่ไหน ค่าจาก ESP32 วิ่งเข้าซี่นั้นทันที, false: รอกดปุ่มส่งค่าเข้าซี่ฟัน
+    autoAssign: false, // true: คลิกฟันซี่ไหน ค่าจาก ESP32 วิ่งเข้าซี่นั้นทันที, false: รอกดปุ่มส่งค่าเข้าซี่ฟัน
     streamingTooth: "23", // ซี่ฟันที่กำลังรับค่าสดจาก ESP32
     status: "connecting", // "online" | "stale" | "offline" | "connecting"
     payload: null, // { temperature, pulse, oxygen, unit, status, timestamp }
