@@ -15,11 +15,11 @@
 ---
 
 ## โครงสร้างไฟล์ในโปรเจกต์
-- [index.html](file:///Users/aufachehlah/Desktop/PulseDent/index.html) — โครงสร้างหลักของหน้าเว็บและแท็บการใช้งานทั้ง 4 ส่วน
-- [style.css](file:///Users/aufachehlah/Desktop/PulseDent/style.css) — การจัดวางเลย์เอาต์ สี และสไตล์ของ UI
-- [script.js](file:///Users/aufachehlah/Desktop/PulseDent/script.js) — ลอจิกการทำงานทั้งหมด ข้อมูลฟันจำลอง 32 ซี่ สถานการณ์จำลอง และการคำนวณผลประเมิน
-- `tooth_01.jpg`, `tooth_02.jpg`, `demo_landing_page.jpg` — รูปภาพแผนผังฟันและภาพประกอบ
-- [pulsedent_web_design_summary.md](file:///Users/aufachehlah/Desktop/PulseDent/pulsedent_web_design_summary.md) — เอกสารสรุปการออกแบบเว็บ
+- [index.html](web_demo/index.html) — โครงสร้างหลักของหน้าเว็บและแท็บการใช้งานทั้ง 4 ส่วน
+- [style.css](web_demo/style.css) — การจัดวางเลย์เอาต์ สี และสไตล์ของ UI
+- [script.js](web_demo/script.js) — ลอจิกการทำงานทั้งหมด ข้อมูลฟันจำลอง 32 ซี่ สถานการณ์จำลอง และการคำนวณผลประเมิน
+- [tooth_01.jpg](web_demo/tooth_01.jpg), [tooth_02.jpg](web_demo/tooth_02.jpg), [demo_landing_page.jpg](web_demo/demo_landing_page.jpg) — รูปภาพแผนผังฟันและภาพประกอบ
+- [pulsedent_web_design_summary.md](web_demo/pulsedent_web_design_summary.md) — เอกสารสรุปการออกแบบเว็บ
 
 ---
 

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PulseDent Platform</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">P</span>
+          <div>
+            <p class="eyebrow">PulseDent Platform</p>
+            <h1>PULSE DENT</h1>
+            <p>Smart Dental Pulp Vitality Assessment Device and Platform</p>
+            <p>พัลส์เดนต์: อุปกรณ์อัจฉริยะสำหรับประเมินภาวะโพรงประสาทฟันตายร่วมกับแพลตฟอร์มดิจิทัล</p>
+          </div>
+        </div>
+        <div class="device-status" id="headerDeviceStatus" aria-label="สถานะอุปกรณ์">
+          <span class="status-dot" id="headerStatusDot" aria-hidden="true"></span>
+          <span id="headerStatusText">เชื่อมต่อสำเร็จ</span>
+          <span class="battery-status" id="batteryStatus" aria-label="แบตเตอรี่อุปกรณ์">
+            <span class="battery-icon" aria-hidden="true"><span></span></span>
+            <strong id="batteryText">67%</strong>
+          </span>
+        </div>
+      </header>
+
+      <nav class="tabbar" aria-label="PulseDent navigation">
+        <button class="tab-button active" type="button" data-tab="dashboard">ตรวจวัด</button>
+        <button class="tab-button" type="button" data-tab="simulation">ข้อมูลอ้างอิง</button>
+        <button class="tab-button" type="button" data-tab="history">ประวัติ</button>
+        <button class="tab-button" type="button" data-tab="settings">การตั้งค่า</button>
+      </nav>
+
+      <main>
+        <section class="tab-panel active" id="dashboard" aria-labelledby="dashboard-tab">
+          <div class="dashboard-grid">
+            <section class="map-panel" aria-label="แผนผังฟันสำหรับเลือกพื้นที่ตรวจ">
+              <div class="panel-heading compact">
+                <div>
+                  <p class="eyebrow">Dental Map</p>
+                  <h2>เลือกฟันสำหรับตรวจวัด</h2>
+                </div>
+                <div class="mode-switch" role="group" aria-label="เลือกโหมดพื้นที่ตรวจ">
+                  <button class="mode-button active" type="button" data-mode="reference">อ้างอิง</button>
+                  <button class="mode-button" type="button" data-mode="target">เป้าหมาย</button>
+                </div>
+              </div>
+
+              <div class="tooth-map" id="toothMap">
+                <img src="tooth_01.jpg" alt="แผนผังฟันสำหรับระบบ PulseDent">
+                <div class="arch-label upper-label" aria-hidden="true">UPPER</div>
+                <div class="arch-label lower-label" aria-hidden="true">LOWER</div>
+                <div class="tooth-layer" id="toothLayer" aria-label="ปุ่มเลือกฟัน"></div>
+              </div>
+
+              <div class="legend" aria-label="คำอธิบายสี">
+                <span><i class="legend-dot reference-dot"></i>พื้นที่อ้างอิง</span>
+                <span><i class="legend-dot target-dot"></i>พื้นที่เป้าหมาย</span>
+                <span><i class="legend-dot live-dot"></i>กำลังรับค่าสดจาก ESP32</span>
+                <span><i class="legend-dot hidden-dot"></i>ซ่อนจากการตั้งค่า</span>
+              </div>
+            </section>
+
+            <section class="results-panel" aria-label="ผลการตรวจวัดจำลอง">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Measurement</p>
+                  <h2>หน้าจอแสดงผลและประมวลผล</h2>
+                </div>
+                <span class="scenario-badge" id="scenarioBadge">เสี่ยงสูง</span>
+              </div>
+
+              <article class="live-sensor-card" id="liveSensorCard" aria-live="polite"></article>
+
+              <div class="measurement-grid">
+                <article class="metric-card" id="referenceCard"></article>
+                <article class="metric-card" id="targetCard"></article>
+                <article class="metric-card wide" id="differenceCard"></article>
+                <article class="risk-card wide" id="riskCard"></article>
+              </div>
+
+              <div class="actions">
+                <button class="secondary-button" id="resetButton" type="button">รีเซ็ต</button>
+                <button class="primary-button" id="saveButton" type="button">บันทึกผล</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="simulation">
+          <div class="work-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Simulation Control</p>
+                <h2>ควบคุมสถานการณ์จำลอง</h2>
+              </div>
+              <span class="scenario-badge" id="simulationStatus">เสี่ยงสูง</span>
+            </div>
+            <div class="scenario-grid" id="scenarioGrid"></div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="history">
+          <div class="work-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Patient Record</p>
+                <h2>ประวัติการตรวจจำลอง</h2>
+              </div>
+              <button class="secondary-button small" id="clearHistoryButton" type="button">ล้างประวัติ</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>วันที่</th>
+                    <th>ผู้รับการตรวจ</th>
+                    <th>ฟันอ้างอิง</th>
+                    <th>ฟันเป้าหมาย</th>
+                    <th>ผลต่างอุณหภูมิ</th>
+                    <th>ผลต่างชีพจร</th>
+                    <th>ผลต่างออกซิเจน</th>
+                    <th>ผลประเมิน</th>
+                  </tr>
+                </thead>
+                <tbody id="historyBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="settings">
+          <div class="settings-grid">
+            <section class="settings-card">
+              <div class="panel-heading compact">
+                <div>
+                  <p class="eyebrow">Display</p>
+                  <h2>ข้อมูลที่แสดงหน้าหลัก</h2>
+                </div>
+              </div>
+              <div class="settings-list" id="displaySettings"></div>
+            </section>
+
+            <section class="settings-card">
+              <div class="panel-heading compact">
+                <div>
+                  <p class="eyebrow">Tooth Groups</p>
+                  <h2>กลุ่มฟันที่กดเลือกได้</h2>
+                </div>
+              </div>
+              <div class="settings-list" id="groupSettings"></div>
+            </section>
+
+            <section class="settings-card">
+              <div class="panel-heading compact">
+                <div>
+                  <p class="eyebrow">Threshold</p>
+                  <h2>เกณฑ์ประเมินจำลอง</h2>
+                </div>
+              </div>
+              <div class="threshold-grid" id="thresholdSettings"></div>
+              <button class="secondary-button full" id="resetSettingsButton" type="button">คืนค่าตั้งต้น</button>
+            </section>
+
+            <section class="settings-card wide">
+              <div class="panel-heading compact">
+                <div>
+                  <p class="eyebrow">ESP32 & Firebase Connection</p>
+                  <h2>ตั้งค่าการรับข้อมูลจาก ESP32 (Firebase Realtime Database)</h2>
+                </div>
+              </div>
+              <div class="firebase-settings-grid" id="firebaseSettings"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>

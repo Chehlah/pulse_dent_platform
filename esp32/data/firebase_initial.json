@@ -1,0 +1,12 @@
+{
+  "devices": {
+    "pulse-dent-01": {
+      "latest": {
+        "temperature": 36.8,
+        "unit": "C",
+        "status": "online",
+        "timestamp": 1795330000000
+      }
+    }
+  }
+}

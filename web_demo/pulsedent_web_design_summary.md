@@ -27,7 +27,7 @@ PulseDent Platform / PULSE DENT
 ## 2. โครงสร้างไฟล์ปัจจุบัน
 
 ```text
-PulseDent/
+web_demo/
 ├── index.html
 ├── style.css
 ├── script.js
