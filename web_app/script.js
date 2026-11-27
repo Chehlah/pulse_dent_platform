@@ -127,6 +127,43 @@ const scenarios = {
   }
 };
 
+const DEVICE_CHANNELS = ["temp", "pulse"];
+
+const CHANNEL_META = {
+  temp: {
+    key: "temp",
+    labelTh: "อุณหภูมิ",
+    shortLabel: "Temp",
+    modeNumber: 1,
+    defaultUnit: "°C",
+    expectedType: "temperature"
+  },
+  pulse: {
+    key: "pulse",
+    labelTh: "สัญญาณชีพจร",
+    shortLabel: "Pulse",
+    modeNumber: 2,
+    defaultUnit: "bpm",
+    expectedType: "pulse"
+  }
+};
+
+function createDeviceChannelState(channelKey) {
+  return {
+    key: channelKey,
+    reportedType: "",
+    status: "connecting", // "online" | "stale" | "offline" | "connecting"
+    measuring: false,
+    pendingCommand: null, // "start" | "stop" | null
+    commandError: "",
+    lastSeen: 0,
+    lastHeartbeatAt: 0,
+    payload: null, // { temperature, pulse, oxygen, unit, status, sensorType, timestamp }
+    lastReceivedAt: 0,
+    errorMessage: ""
+  };
+}
+
 const defaultSettings = {
   showTemp: true,
   showPulse: true,
@@ -145,7 +182,8 @@ const defaultSettings = {
   },
   firebase: {
     databaseUrl: "https://pulsedent-02-default-rtdb.asia-southeast1.firebasedatabase.app",
-    deviceId: "pulse-dent-01",
+    tempDeviceId: "pulse-dent-01",
+    pulseDeviceId: "pulse-dent-02",
     pollIntervalMs: 1000
   }
 };
@@ -156,29 +194,25 @@ const state = {
   targetTooth: "23",
   scenario: "high",
   toothData: structuredClone(baseToothData),
-  toothSources: {}, // toothId -> "live" | "captured" | "mock"
+  toothSources: {}, // toothId -> { mode: "live" | "captured", sensors: ["temp" | "pulse"] }
   settings: loadSettings(),
   history: loadHistory(),
   live: {
     enabled: true,
     autoAssign: false, // true: คลิกฟันซี่ไหน ค่าจาก ESP32 วิ่งเข้าซี่นั้นทันที, false: รอกดปุ่มส่งค่าเข้าซี่ฟัน
-    streamingTooth: "23", // ซี่ฟันที่กำลังรับค่าสดจาก ESP32
-    status: "connecting", // "online" | "stale" | "offline" | "connecting"
-    measuring: false,     // สถานะการวัดจริงจาก state/measuring (false = Standby, true = Measuring)
-    pendingCommand: null, // "start" | "stop" | null (ระหว่างรอยืนยันจาก ESP32)
-    commandError: "",     // ข้อความแจ้งเตือนกรณีส่งคำสั่งไม่สำเร็จหรือหมดเวลา
-    lastSeen: 0,          // timestamp ล่าสุดจาก state/lastSeen
-    lastHeartbeatAt: 0,   // เวลาฝั่ง client ที่ได้รับ Heartbeat ล่าสุด
-    payload: null,        // { temperature, pulse, oxygen, unit, status, timestamp }
-    lastReceivedAt: 0,
-    errorMessage: ""
+    streamingTooth: "23",
+    devices: {
+      temp: createDeviceChannelState("temp"),
+      pulse: createDeviceChannelState("pulse")
+    }
   }
 };
 
-let firebaseEventSource = null;
-let firebasePollTimer = null;
+const firebaseHandles = {
+  temp: { eventSource: null, pollTimer: null, commandTimeoutTimer: null },
+  pulse: { eventSource: null, pollTimer: null, commandTimeoutTimer: null }
+};
 let staleCheckTimer = null;
-let commandTimeoutTimer = null;
 
 const els = {
   toothLayer: document.querySelector("#toothLayer"),
@@ -221,7 +255,7 @@ function bindEvents() {
   document.querySelectorAll(".mode-button").forEach((button) => {
     button.addEventListener("click", () => {
       setMode(button.dataset.mode);
-      if (state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring) {
+      if (state.live.enabled && state.live.autoAssign && hasAnyMeasuringWithData()) {
         state.live.streamingTooth = getSelectedToothForMode();
         applyLivePayloadToTooth(state.live.streamingTooth, "live");
       }
@@ -236,7 +270,7 @@ function bindEvents() {
     state.toothSources = {};
     applyScenario(state.scenario, false);
     state.live.streamingTooth = getSelectedToothForMode();
-    if (state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring && state.live.payload) {
+    if (state.live.enabled && state.live.autoAssign && hasAnyMeasuringWithData()) {
       applyLivePayloadToTooth(state.live.streamingTooth, "live");
     }
     updateUI();
@@ -344,8 +378,12 @@ function renderSettings() {
         <input id="fbDatabaseUrl" type="url" value="${escapeAttr(fb.databaseUrl)}" placeholder="https://pulsedent-02-default-rtdb.asia-southeast1.firebasedatabase.app">
       </div>
       <div class="threshold-field">
-        <label for="fbDeviceId">Device ID (ESP32)</label>
-        <input id="fbDeviceId" type="text" value="${escapeAttr(fb.deviceId)}" placeholder="pulse-dent-01">
+        <label for="fbTempDeviceId">Device ID — อุณหภูมิ (Mode 1)</label>
+        <input id="fbTempDeviceId" type="text" value="${escapeAttr(fb.tempDeviceId)}" placeholder="pulse-dent-01">
+      </div>
+      <div class="threshold-field">
+        <label for="fbPulseDeviceId">Device ID — ชีพจร (Mode 2)</label>
+        <input id="fbPulseDeviceId" type="text" value="${escapeAttr(fb.pulseDeviceId)}" placeholder="pulse-dent-02">
       </div>
       <div class="threshold-field">
         <label for="fbPollInterval">รอบดึงข้อมูล (ms)</label>
@@ -357,12 +395,14 @@ function renderSettings() {
     const saveFbBtn = els.firebaseSettings.querySelector("#saveFirebaseConfigButton");
     saveFbBtn.addEventListener("click", () => {
       const rawUrl = els.firebaseSettings.querySelector("#fbDatabaseUrl").value.trim().replace(/\/+$/, "");
-      const rawDevice = els.firebaseSettings.querySelector("#fbDeviceId").value.trim() || "pulse-dent-01";
+      const rawTempDevice = els.firebaseSettings.querySelector("#fbTempDeviceId").value.trim();
+      const rawPulseDevice = els.firebaseSettings.querySelector("#fbPulseDeviceId").value.trim();
       const rawInterval = Math.max(500, Number(els.firebaseSettings.querySelector("#fbPollInterval").value) || 1000);
 
       state.settings.firebase = {
         databaseUrl: rawUrl || defaultSettings.firebase.databaseUrl,
-        deviceId: rawDevice,
+        tempDeviceId: rawTempDevice,
+        pulseDeviceId: rawPulseDevice,
         pollIntervalMs: rawInterval
       };
       persistSettings();
@@ -442,10 +482,12 @@ function selectTooth(toothId) {
   const tooth = getTooth(toothId);
   if (!state.settings.enabledGroups[tooth.group]) return;
 
-  // ถ้าซี่เดิมกำลังรับค่าสดอยู่ แล้วผู้ใช้คลิกย้ายไปซี่อื่น ให้เปลี่ยนสถานะซี่เดิมเป็น "ล็อกค่าจาก ESP32 แล้ว"
   const prevStreaming = state.live.streamingTooth;
-  if (prevStreaming && prevStreaming !== toothId && state.toothSources[prevStreaming] === "live") {
-    state.toothSources[prevStreaming] = "captured";
+  if (prevStreaming && prevStreaming !== toothId && state.toothSources[prevStreaming]?.mode === "live") {
+    state.toothSources[prevStreaming] = {
+      ...state.toothSources[prevStreaming],
+      mode: "captured"
+    };
   }
 
   if (state.mode === "reference") {
@@ -456,7 +498,7 @@ function selectTooth(toothId) {
 
   state.live.streamingTooth = toothId;
 
-  if (state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring && state.live.payload) {
+  if (state.live.enabled && state.live.autoAssign && hasAnyMeasuringWithData()) {
     applyLivePayloadToTooth(toothId, "live");
   }
 
@@ -477,7 +519,7 @@ function applyScenario(key, shouldRender = true) {
   }
 
   state.live.streamingTooth = getSelectedToothForMode();
-  if (state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring && state.live.payload) {
+  if (state.live.enabled && state.live.autoAssign && hasAnyMeasuringWithData()) {
     applyLivePayloadToTooth(state.live.streamingTooth, "live");
   }
 
@@ -485,81 +527,122 @@ function applyScenario(key, shouldRender = true) {
 }
 
 // ==========================================
-// Firebase Realtime Database Sync (ESP32)
+// Firebase Realtime Database Sync (Dual ESP32: Temp + Pulse)
 // ==========================================
 
 const STALE_TIMEOUT_MS = 6000;    // เกิน 6 วินาทีที่ Heartbeat/ค่าไม่อัปเดต -> สัญญาณไม่อัปเดต (stale)
 const OFFLINE_TIMEOUT_MS = 12000; // เกิน 12 วินาทีที่ Heartbeat/ค่าไม่อัปเดต -> ESP32 ออฟไลน์ (offline)
 const COMMAND_TIMEOUT_MS = 8000;  // เกิน 8 วินาทีที่ ESP32 ไม่ยืนยัน state/measuring -> คำสั่งหมดเวลา
 
-function getFirebaseDeviceBaseUrl() {
+function getDeviceIdForChannel(channelKey) {
+  const fb = state.settings.firebase || defaultSettings.firebase;
+  if (channelKey === "temp") {
+    return String(fb.tempDeviceId || "").trim();
+  }
+  return String(fb.pulseDeviceId || "").trim();
+}
+
+function getFirebaseDeviceBaseUrl(channelKey) {
   const fb = state.settings.firebase || defaultSettings.firebase;
   const baseUrl = (fb.databaseUrl || defaultSettings.firebase.databaseUrl).replace(/\/+$/, "");
-  const deviceId = encodeURIComponent((fb.deviceId || defaultSettings.firebase.deviceId).trim());
-  return `${baseUrl}/devices/${deviceId}`;
+  const deviceId = getDeviceIdForChannel(channelKey);
+  if (!deviceId) return "";
+  return `${baseUrl}/devices/${encodeURIComponent(deviceId)}`;
 }
 
-function getFirebaseEndpointUrl() {
-  return `${getFirebaseDeviceBaseUrl()}.json`;
+function getFirebaseEndpointUrl(channelKey) {
+  const base = getFirebaseDeviceBaseUrl(channelKey);
+  return base ? `${base}.json` : "";
 }
 
-function getFirebaseControlCommandUrl() {
-  return `${getFirebaseDeviceBaseUrl()}/control/command.json`;
+function getFirebaseControlCommandUrl(channelKey) {
+  const base = getFirebaseDeviceBaseUrl(channelKey);
+  return base ? `${base}/control/command.json` : "";
 }
 
-function evaluateConnectionStatus() {
-  if (!state.live.enabled) {
-    state.live.status = "offline";
+function isChannelOnline(channelKey) {
+  const dev = state.live.devices[channelKey];
+  return state.live.enabled && Boolean(dev) && dev.status === "online";
+}
+
+function isChannelMeasuringWithData(channelKey) {
+  const dev = state.live.devices[channelKey];
+  if (!isChannelOnline(channelKey) || !dev.measuring || !dev.payload) return false;
+  if (channelKey === "temp") return Number.isFinite(dev.payload.temperature);
+  if (channelKey === "pulse") return Number.isFinite(dev.payload.pulse);
+  return false;
+}
+
+function getOnlineChannels() {
+  return DEVICE_CHANNELS.filter((ch) => isChannelOnline(ch));
+}
+
+function getMeasuringChannelsWithData() {
+  return DEVICE_CHANNELS.filter((ch) => isChannelMeasuringWithData(ch));
+}
+
+function hasAnyMeasuringWithData() {
+  return getMeasuringChannelsWithData().length > 0;
+}
+
+function evaluateChannelConnectionStatus(channelKey) {
+  const dev = state.live.devices[channelKey];
+  if (!state.live.enabled || !getDeviceIdForChannel(channelKey)) {
+    dev.status = "offline";
     return;
   }
 
-  // ใช้เวลาล่าสุดระหว่าง Heartbeat (state/lastSeen) หรือข้อมูลอุณหภูมิ (latest/timestamp)
-  const lastActiveAt = Math.max(state.live.lastHeartbeatAt || 0, state.live.lastReceivedAt || 0);
-
+  const lastActiveAt = Math.max(dev.lastHeartbeatAt || 0, dev.lastReceivedAt || 0);
   if (!lastActiveAt) {
-    state.live.status = state.live.errorMessage ? "offline" : "connecting";
+    dev.status = dev.errorMessage ? "offline" : "connecting";
     return;
   }
 
   const ageMs = Date.now() - lastActiveAt;
   if (ageMs <= STALE_TIMEOUT_MS) {
-    state.live.status = "online";
+    dev.status = "online";
   } else if (ageMs <= OFFLINE_TIMEOUT_MS) {
-    state.live.status = "stale";
+    dev.status = "stale";
   } else {
-    state.live.status = "offline";
+    dev.status = "offline";
   }
 }
 
-function clearCommandTimeout() {
-  if (commandTimeoutTimer) {
-    clearTimeout(commandTimeoutTimer);
-    commandTimeoutTimer = null;
+function clearChannelCommandTimeout(channelKey) {
+  const handle = firebaseHandles[channelKey];
+  if (handle.commandTimeoutTimer) {
+    clearTimeout(handle.commandTimeoutTimer);
+    handle.commandTimeoutTimer = null;
   }
 }
 
-async function sendToggleMeasurementCommand() {
-  if (!state.live.enabled || state.live.status !== "online") return;
-  if (state.live.pendingCommand) return; // ป้องกันการกดปุ่มซ้ำระหว่างรอคำสั่ง
+async function sendToggleMeasurementCommand(channelKey, forcedTargetState = null) {
+  const dev = state.live.devices[channelKey];
+  if (!isChannelOnline(channelKey)) return;
+  if (dev.pendingCommand) return;
 
-  const targetMeasuring = !state.live.measuring;
+  const targetMeasuring = forcedTargetState !== null ? Boolean(forcedTargetState) : !dev.measuring;
+  if (targetMeasuring === dev.measuring) return;
+
   const commandStr = targetMeasuring ? "start" : "stop";
+  const endpointUrl = getFirebaseControlCommandUrl(channelKey);
+  if (!endpointUrl) return;
 
-  state.live.pendingCommand = commandStr;
-  state.live.commandError = "";
+  dev.pendingCommand = commandStr;
+  dev.commandError = "";
   updateUI();
 
-  clearCommandTimeout();
-  commandTimeoutTimer = setTimeout(() => {
-    if (state.live.pendingCommand === commandStr) {
-      state.live.pendingCommand = null;
-      state.live.commandError = `คำสั่ง "${commandStr === "start" ? "เริ่มการวัด" : "หยุดการวัด"}" หมดเวลา (ESP32 ไม่ตอบกลับภายใน ${COMMAND_TIMEOUT_MS / 1000} วินาที)`;
+  clearChannelCommandTimeout(channelKey);
+  firebaseHandles[channelKey].commandTimeoutTimer = setTimeout(() => {
+    if (dev.pendingCommand === commandStr) {
+      dev.pendingCommand = null;
+      dev.commandError = `คำสั่ง "${commandStr === "start" ? "เริ่มการวัด" : "หยุดการวัด"}" หมดเวลา (ไม่ตอบกลับภายใน ${COMMAND_TIMEOUT_MS / 1000} วินาที)`;
       updateUI();
     }
   }, COMMAND_TIMEOUT_MS);
 
   try {
-    const response = await fetch(getFirebaseControlCommandUrl(), {
+    const response = await fetch(endpointUrl, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(commandStr)
@@ -569,98 +652,130 @@ async function sendToggleMeasurementCommand() {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    // ดึงข้อมูลสถานะจาก Firebase ทันทีเพื่อตรวจการยืนยัน state/measuring
-    fetchFirebaseDevice(getFirebaseEndpointUrl());
+    fetchFirebaseDevice(channelKey, getFirebaseEndpointUrl(channelKey));
   } catch (err) {
-    clearCommandTimeout();
-    state.live.pendingCommand = null;
-    state.live.commandError = `ส่งคำสั่งไม่สำเร็จ (${err.message || "เครือข่ายขัดข้อง"})`;
+    clearChannelCommandTimeout(channelKey);
+    dev.pendingCommand = null;
+    dev.commandError = `ส่งคำสั่งไม่สำเร็จ (${err.message || "เครือข่ายขัดข้อง"})`;
     updateUI();
   }
+}
+
+function sendBatchMeasurementCommand(targetMeasuring) {
+  getOnlineChannels().forEach((channelKey) => {
+    sendToggleMeasurementCommand(channelKey, targetMeasuring);
+  });
 }
 
 function startFirebaseSync() {
   stopFirebaseSync();
 
   if (!state.live.enabled) {
-    state.live.status = "offline";
+    DEVICE_CHANNELS.forEach((ch) => {
+      state.live.devices[ch].status = "offline";
+      state.live.devices[ch].measuring = false;
+      state.live.devices[ch].pendingCommand = null;
+    });
     updateUI();
     return;
   }
 
-  state.live.status = "connecting";
-  state.live.lastReceivedAt = 0;
-  state.live.lastHeartbeatAt = 0;
-  state.live.pendingCommand = null;
-  state.live.commandError = "";
-  state.live.errorMessage = "";
-  updateUI();
-
-  const endpoint = getFirebaseEndpointUrl();
-
-  // ดึงค่าครั้งแรกทันทีด้วย fetch
-  fetchFirebaseDevice(endpoint);
-
-  // เปิด Server-Sent Events (SSE) กับ Firebase REST Streaming บน /devices/<deviceId>.json
-  if (typeof EventSource !== "undefined") {
-    try {
-      firebaseEventSource = new EventSource(endpoint);
-      const onSseEvent = (event) => {
-        try {
-          const packet = JSON.parse(event.data);
-          if (packet && packet.path !== undefined) {
-            handleSsePacket(packet.path, packet.data);
-          }
-        } catch {
-          // fallback to polling
-        }
-      };
-      firebaseEventSource.addEventListener("put", onSseEvent);
-      firebaseEventSource.addEventListener("patch", onSseEvent);
-      firebaseEventSource.onerror = () => {
-        // หาก SSE ขัดข้อง ระบบยังมี polling ทำงานคู่ขนาน
-      };
-    } catch {
-      firebaseEventSource = null;
-    }
-  }
-
-  // ตั้งเวลา Polling สำรองตามค่า pollIntervalMs (ค่าเริ่มต้น 1000 ms)
   const intervalMs = Math.max(500, Number(state.settings.firebase?.pollIntervalMs) || 1000);
-  firebasePollTimer = setInterval(() => {
-    if (state.live.enabled) {
-      fetchFirebaseDevice(endpoint);
-    }
-  }, intervalMs);
 
-  // ตรวจสอบว่าข้อมูลค้างหรือ ESP32 ออฟไลน์หรือไม่ทุก 1 วินาที
+  DEVICE_CHANNELS.forEach((channelKey) => {
+    const dev = state.live.devices[channelKey];
+    const endpoint = getFirebaseEndpointUrl(channelKey);
+
+    dev.lastReceivedAt = 0;
+    dev.lastHeartbeatAt = 0;
+    dev.pendingCommand = null;
+    dev.commandError = "";
+    dev.errorMessage = "";
+
+    if (!endpoint) {
+      dev.status = "offline";
+      dev.errorMessage = "ไม่ได้ระบุ Device ID";
+      return;
+    }
+
+    dev.status = "connecting";
+
+    // ดึงค่าครั้งแรกทันทีด้วย fetch
+    fetchFirebaseDevice(channelKey, endpoint);
+
+    // เปิด Server-Sent Events (SSE) สำหรับอุปกรณ์นี้
+    if (typeof EventSource !== "undefined") {
+      try {
+        const es = new EventSource(endpoint);
+        const onSseEvent = (event) => {
+          try {
+            const packet = JSON.parse(event.data);
+            if (packet && packet.path !== undefined) {
+              handleSsePacket(channelKey, packet.path, packet.data);
+            }
+          } catch {
+            // fallback to polling
+          }
+        };
+        es.addEventListener("put", onSseEvent);
+        es.addEventListener("patch", onSseEvent);
+        es.onerror = () => {
+          // หาก SSE ขัดข้อง ระบบยังมี polling ทำงานคู่ขนาน
+        };
+        firebaseHandles[channelKey].eventSource = es;
+      } catch {
+        firebaseHandles[channelKey].eventSource = null;
+      }
+    }
+
+    // ตั้งเวลา Polling สำรอง
+    firebaseHandles[channelKey].pollTimer = setInterval(() => {
+      if (state.live.enabled) {
+        fetchFirebaseDevice(channelKey, endpoint);
+      }
+    }, intervalMs);
+  });
+
+  // ตรวจสอบสถานะ stale/offline ของทุกอุปกรณ์ทุก 1 วินาที
   staleCheckTimer = setInterval(() => {
     if (!state.live.enabled) return;
-    const prevStatus = state.live.status;
-    evaluateConnectionStatus();
-    if (state.live.status !== prevStatus) {
+    let changed = false;
+    DEVICE_CHANNELS.forEach((ch) => {
+      const prevStatus = state.live.devices[ch].status;
+      evaluateChannelConnectionStatus(ch);
+      if (state.live.devices[ch].status !== prevStatus) {
+        changed = true;
+      }
+    });
+    if (changed) {
       updateUI();
     }
   }, 1000);
+
+  updateUI();
 }
 
 function stopFirebaseSync() {
-  clearCommandTimeout();
-  if (firebaseEventSource) {
-    firebaseEventSource.close();
-    firebaseEventSource = null;
-  }
-  if (firebasePollTimer) {
-    clearInterval(firebasePollTimer);
-    firebasePollTimer = null;
-  }
+  DEVICE_CHANNELS.forEach((ch) => {
+    clearChannelCommandTimeout(ch);
+    if (firebaseHandles[ch].eventSource) {
+      firebaseHandles[ch].eventSource.close();
+      firebaseHandles[ch].eventSource = null;
+    }
+    if (firebaseHandles[ch].pollTimer) {
+      clearInterval(firebaseHandles[ch].pollTimer);
+      firebaseHandles[ch].pollTimer = null;
+    }
+  });
   if (staleCheckTimer) {
     clearInterval(staleCheckTimer);
     staleCheckTimer = null;
   }
 }
 
-async function fetchFirebaseDevice(endpoint) {
+async function fetchFirebaseDevice(channelKey, endpoint) {
+  if (!endpoint) return;
+  const dev = state.live.devices[channelKey];
   try {
     const response = await fetch(endpoint, { cache: "no-store" });
     if (!response.ok) {
@@ -668,162 +783,213 @@ async function fetchFirebaseDevice(endpoint) {
     }
     const data = await response.json();
     if (data && typeof data === "object") {
-      handleIncomingDeviceSnapshot(data);
+      handleIncomingDeviceSnapshot(channelKey, data);
     } else {
-      state.live.status = "offline";
-      state.live.errorMessage = "ยังไม่มีข้อมูลจาก ESP32 ใน Firebase";
+      dev.status = "offline";
+      dev.errorMessage = "ยังไม่มีข้อมูลจาก ESP32 ใน Firebase";
       updateUI();
     }
   } catch (err) {
-    state.live.errorMessage = err.message || "เชื่อมต่อ Firebase ไม่สำเร็จ";
-    evaluateConnectionStatus();
-    const lastActiveAt = Math.max(state.live.lastHeartbeatAt || 0, state.live.lastReceivedAt || 0);
+    dev.errorMessage = err.message || "เชื่อมต่อ Firebase ไม่สำเร็จ";
+    evaluateChannelConnectionStatus(channelKey);
+    const lastActiveAt = Math.max(dev.lastHeartbeatAt || 0, dev.lastReceivedAt || 0);
     if (!lastActiveAt || Date.now() - lastActiveAt > STALE_TIMEOUT_MS) {
-      state.live.status = "offline";
+      dev.status = "offline";
     }
     updateUI();
   }
 }
 
-function handleSsePacket(path, data) {
+function handleSsePacket(channelKey, path, data) {
+  const dev = state.live.devices[channelKey];
   if (!path || path === "/") {
     if (data && typeof data === "object") {
-      handleIncomingDeviceSnapshot(data);
+      handleIncomingDeviceSnapshot(channelKey, data);
     }
     return;
   }
 
   if (path === "/state" && data && typeof data === "object") {
-    handleIncomingStateData(data);
+    handleIncomingStateData(channelKey, data);
   } else if (path === "/state/measuring") {
-    handleIncomingStateData({ measuring: Boolean(data), lastSeen: state.live.lastSeen });
+    handleIncomingStateData(channelKey, { measuring: Boolean(data), lastSeen: dev.lastSeen, sensorType: dev.reportedType });
   } else if (path === "/state/lastSeen") {
-    handleIncomingStateData({ measuring: state.live.measuring, lastSeen: Number(data) });
+    handleIncomingStateData(channelKey, { measuring: dev.measuring, lastSeen: Number(data), sensorType: dev.reportedType });
+  } else if (path === "/state/sensorType") {
+    handleIncomingStateData(channelKey, { measuring: dev.measuring, lastSeen: dev.lastSeen, sensorType: String(data || "") });
   } else if (path === "/latest" && data && typeof data === "object") {
-    handleIncomingLatestData(data);
+    handleIncomingLatestData(channelKey, data);
   }
 }
 
-function handleIncomingDeviceSnapshot(snapshot) {
-  // รองรับทั้งโครงสร้างใหม่ { control, state, latest } และโครงสร้างเดิมกรณีอ่านจาก latest โดยตรง
+function handleIncomingDeviceSnapshot(channelKey, snapshot) {
   if (snapshot.state && typeof snapshot.state === "object") {
-    handleIncomingStateData(snapshot.state);
+    handleIncomingStateData(channelKey, snapshot.state);
   }
   if (snapshot.latest && typeof snapshot.latest === "object") {
-    handleIncomingLatestData(snapshot.latest);
-  } else if (snapshot.temperature !== undefined || snapshot.temp !== undefined) {
-    handleIncomingLatestData(snapshot);
+    handleIncomingLatestData(channelKey, snapshot.latest);
+  } else if (snapshot.temperature !== undefined || snapshot.temp !== undefined || snapshot.pulse !== undefined) {
+    handleIncomingLatestData(channelKey, snapshot);
   }
 }
 
-function handleIncomingStateData(stateObj) {
-  const prevStatus = state.live.status;
-  const prevMeasuring = state.live.measuring;
-  const prevPending = state.live.pendingCommand;
+function handleIncomingStateData(channelKey, stateObj) {
+  const dev = state.live.devices[channelKey];
+  const prevStatus = dev.status;
+  const prevMeasuring = dev.measuring;
+  const prevPending = dev.pendingCommand;
+  const prevType = dev.reportedType;
+
+  if (typeof stateObj.sensorType === "string" && stateObj.sensorType.trim()) {
+    dev.reportedType = stateObj.sensorType.trim().toLowerCase();
+  }
 
   if (typeof stateObj.measuring === "boolean") {
-    state.live.measuring = stateObj.measuring;
+    dev.measuring = stateObj.measuring;
 
-    // ตรวจสอบว่าตรงกับคำสั่งที่กำลังรอยืนยันหรือไม่
     if (
-      (state.live.pendingCommand === "start" && state.live.measuring === true) ||
-      (state.live.pendingCommand === "stop" && state.live.measuring === false)
+      (dev.pendingCommand === "start" && dev.measuring === true) ||
+      (dev.pendingCommand === "stop" && dev.measuring === false)
     ) {
-      clearCommandTimeout();
-      state.live.pendingCommand = null;
-      state.live.commandError = "";
+      clearChannelCommandTimeout(channelKey);
+      dev.pendingCommand = null;
+      dev.commandError = "";
     }
   }
 
   const incomingLastSeen = typeof stateObj.lastSeen === "number" && stateObj.lastSeen > 0 ? stateObj.lastSeen : null;
   if (incomingLastSeen !== null) {
-    const isFirstSeen = !state.live.lastSeen;
-    const isNewHeartbeat = isFirstSeen || incomingLastSeen !== state.live.lastSeen;
-    state.live.lastSeen = incomingLastSeen;
+    const isFirstSeen = !dev.lastSeen;
+    const isNewHeartbeat = isFirstSeen || incomingLastSeen !== dev.lastSeen;
+    dev.lastSeen = incomingLastSeen;
 
     if (isFirstSeen) {
       const serverAgeMs = Date.now() - incomingLastSeen;
-      state.live.lastHeartbeatAt = serverAgeMs > STALE_TIMEOUT_MS ? incomingLastSeen : Date.now();
+      dev.lastHeartbeatAt = serverAgeMs > STALE_TIMEOUT_MS ? incomingLastSeen : Date.now();
     } else if (isNewHeartbeat) {
-      state.live.lastHeartbeatAt = Date.now();
+      dev.lastHeartbeatAt = Date.now();
     }
   }
 
-  state.live.errorMessage = "";
-  evaluateConnectionStatus();
+  dev.errorMessage = "";
+  evaluateChannelConnectionStatus(channelKey);
 
   if (
-    state.live.status !== prevStatus ||
-    state.live.measuring !== prevMeasuring ||
-    state.live.pendingCommand !== prevPending
+    dev.status !== prevStatus ||
+    dev.measuring !== prevMeasuring ||
+    dev.pendingCommand !== prevPending ||
+    dev.reportedType !== prevType
   ) {
     updateUI();
   }
 }
 
-function handleIncomingLatestData(raw) {
-  const temp = Number(raw.temperature ?? raw.temp);
-  if (!Number.isFinite(temp)) return;
+function handleIncomingLatestData(channelKey, raw) {
+  const dev = state.live.devices[channelKey];
+  const rawTemp = raw.temperature ?? raw.temp;
+  const hasTemp = rawTemp !== undefined && rawTemp !== null && Number.isFinite(Number(rawTemp));
+  const hasPulse = raw.pulse !== undefined && raw.pulse !== null && Number.isFinite(Number(raw.pulse));
+  const hasOxygen = raw.oxygen !== undefined && raw.oxygen !== null && Number.isFinite(Number(raw.oxygen));
 
-  const hasPulse = raw.pulse !== undefined && Number.isFinite(Number(raw.pulse));
-  const hasOxygen = raw.oxygen !== undefined && Number.isFinite(Number(raw.oxygen));
+  if (!hasTemp && !hasPulse) return;
+
+  if (typeof raw.sensorType === "string" && raw.sensorType.trim()) {
+    dev.reportedType = raw.sensorType.trim().toLowerCase();
+  }
+
   const incomingTimestamp = typeof raw.timestamp === "number" && raw.timestamp > 0 ? raw.timestamp : null;
-
-  const prevPayload = state.live.payload;
+  const prevPayload = dev.payload;
   const isFirstFetch = !prevPayload;
   const isNewPacket =
     isFirstFetch ||
     (incomingTimestamp !== null && incomingTimestamp !== prevPayload.timestamp) ||
-    (incomingTimestamp === null && temp !== prevPayload.temperature);
+    (incomingTimestamp === null && (
+      (hasTemp && Number(rawTemp) !== prevPayload.temperature) ||
+      (hasPulse && Number(raw.pulse) !== prevPayload.pulse)
+    ));
 
   if (isFirstFetch) {
     if (incomingTimestamp !== null) {
       const serverAgeMs = Date.now() - incomingTimestamp;
-      state.live.lastReceivedAt = serverAgeMs > STALE_TIMEOUT_MS ? incomingTimestamp : Date.now();
+      dev.lastReceivedAt = serverAgeMs > STALE_TIMEOUT_MS ? incomingTimestamp : Date.now();
     } else {
-      state.live.lastReceivedAt = Date.now();
+      dev.lastReceivedAt = Date.now();
     }
   } else if (isNewPacket) {
-    state.live.lastReceivedAt = Date.now();
+    dev.lastReceivedAt = Date.now();
   }
 
-  const prevStatus = state.live.status;
-  state.live.payload = {
-    temperature: temp,
+  const prevStatus = dev.status;
+  dev.payload = {
+    temperature: hasTemp ? Number(rawTemp) : null,
     pulse: hasPulse ? Number(raw.pulse) : null,
     oxygen: hasOxygen ? Number(raw.oxygen) : null,
-    unit: raw.unit || "C",
+    unit: raw.unit || (channelKey === "temp" ? "C" : "bpm"),
     status: raw.status || "online",
+    sensorType: dev.reportedType || CHANNEL_META[channelKey].expectedType,
     timestamp: incomingTimestamp ?? (prevPayload?.timestamp || Date.now())
   };
 
-  state.live.errorMessage = "";
-  evaluateConnectionStatus();
+  dev.errorMessage = "";
+  evaluateChannelConnectionStatus(channelKey);
 
   // อัปเดตค่าเข้าซี่ฟันอัตโนมัติเฉพาะเมื่อ ESP32 Online และอยู่ในสถานะ Measuring เท่านั้น
-  if (state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring && isNewPacket) {
+  if (state.live.enabled && state.live.autoAssign && dev.status === "online" && dev.measuring && isNewPacket) {
     const activeTooth = getSelectedToothForMode();
     state.live.streamingTooth = activeTooth;
     applyLivePayloadToTooth(activeTooth, "live");
   }
 
-  if (isNewPacket || state.live.status !== prevStatus) {
+  if (isNewPacket || dev.status !== prevStatus) {
     updateUI();
   }
 }
 
 function applyLivePayloadToTooth(toothId, sourceType = "live") {
-  if (!toothId || !state.live.payload) return;
+  if (!toothId) return;
 
   const existing = state.toothData[toothId] || baseToothData[toothId] || { temp: 36.2, pulse: 76, oxygen: 85 };
-  const payload = state.live.payload;
+  let nextTemp = existing.temp;
+  let nextPulse = existing.pulse;
+  let nextOxygen = existing.oxygen;
+  const appliedSensors = [];
+
+  if (isChannelMeasuringWithData("temp")) {
+    const p = state.live.devices.temp.payload;
+    if (p && p.temperature !== null) {
+      nextTemp = Number(p.temperature.toFixed(1));
+      appliedSensors.push("temp");
+    }
+    if (p && p.oxygen !== null) {
+      nextOxygen = p.oxygen;
+    }
+  }
+
+  if (isChannelMeasuringWithData("pulse")) {
+    const p = state.live.devices.pulse.payload;
+    if (p && p.pulse !== null) {
+      nextPulse = Math.round(p.pulse);
+      appliedSensors.push("pulse");
+    }
+    if (p && p.oxygen !== null) {
+      nextOxygen = p.oxygen;
+    }
+  }
+
+  if (!appliedSensors.length) return;
 
   state.toothData[toothId] = {
-    temp: Number(payload.temperature.toFixed(1)),
-    pulse: payload.pulse !== null ? payload.pulse : existing.pulse,
-    oxygen: payload.oxygen !== null ? payload.oxygen : existing.oxygen
+    temp: nextTemp,
+    pulse: nextPulse,
+    oxygen: nextOxygen
   };
-  state.toothSources[toothId] = sourceType;
+
+  const prevSensors = state.toothSources[toothId]?.sensors || [];
+  const mergedSensors = Array.from(new Set([...prevSensors, ...appliedSensors]));
+  state.toothSources[toothId] = {
+    mode: sourceType,
+    sensors: mergedSensors
+  };
 }
 
 // ==========================================
@@ -849,16 +1015,39 @@ function updateHeaderStatus() {
     return;
   }
 
-  if (state.live.status === "online") {
-    if (state.live.measuring && state.live.payload) {
-      els.headerStatusText.textContent = `ESP32: Online · Measuring (${formatNumber(state.live.payload.temperature)} °C)`;
-    } else {
-      els.headerStatusText.textContent = "ESP32: Online · Standby (--.-- °C)";
+  const onlineChannels = getOnlineChannels();
+  if (onlineChannels.length > 0) {
+    const tempDev = state.live.devices.temp;
+    const pulseDev = state.live.devices.pulse;
+    const sensorNames = onlineChannels.map((ch) => CHANNEL_META[ch].shortLabel).join(" + ");
+    const readingParts = [];
+
+    if (isChannelOnline("temp")) {
+      readingParts.push(
+        isChannelMeasuringWithData("temp")
+          ? `${formatNumber(tempDev.payload.temperature)} °C`
+          : "--.-- °C"
+      );
     }
-  } else if (state.live.status === "stale") {
+    if (isChannelOnline("pulse")) {
+      readingParts.push(
+        isChannelMeasuringWithData("pulse")
+          ? `${Math.round(pulseDev.payload.pulse)} bpm`
+          : "-- bpm"
+      );
+    }
+
+    const anyMeasuring = onlineChannels.some((ch) => state.live.devices[ch].measuring);
+    const modeText = anyMeasuring ? "Measuring" : "Standby";
+    els.headerStatusText.textContent = `ESP32 (${sensorNames}): Online · ${modeText} (${readingParts.join(" · ")})`;
+    return;
+  }
+
+  const statuses = DEVICE_CHANNELS.map((ch) => state.live.devices[ch].status);
+  if (statuses.includes("stale")) {
     els.headerStatusDot.classList.add("stale");
     els.headerStatusText.textContent = "ESP32 สัญญาณไม่อัปเดต";
-  } else if (state.live.status === "connecting") {
+  } else if (statuses.includes("connecting")) {
     els.headerStatusDot.classList.add("stale");
     els.headerStatusText.textContent = "กำลังเชื่อมต่อ Firebase...";
   } else {
@@ -869,12 +1058,14 @@ function updateHeaderStatus() {
 
 function updateToothButtons() {
   const activeSelectedTooth = getSelectedToothForMode();
+  const anyLiveStreaming = state.live.enabled && state.live.autoAssign && hasAnyMeasuringWithData();
+
   els.toothLayer.querySelectorAll(".tooth-button").forEach((button) => {
     const id = button.dataset.tooth;
     const tooth = getTooth(id);
     const hidden = !state.settings.enabledGroups[tooth.group];
-    const isStreaming = state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring && id === activeSelectedTooth;
-    const isEspAssigned = state.toothSources[id] === "live" || state.toothSources[id] === "captured";
+    const isStreaming = anyLiveStreaming && id === activeSelectedTooth;
+    const isEspAssigned = Boolean(state.toothSources[id]?.sensors?.length);
 
     button.classList.toggle("reference", id === state.referenceTooth);
     button.classList.toggle("target", id === state.targetTooth);
@@ -886,50 +1077,42 @@ function updateToothButtons() {
   });
 }
 
-function updateLiveSensorCard() {
-  if (!els.liveSensorCard) return;
+function renderDeviceModuleCard(channelKey) {
+  const meta = CHANNEL_META[channelKey];
+  const dev = state.live.devices[channelKey];
+  const deviceId = getDeviceIdForChannel(channelKey) || "ยังไม่กำหนด";
+  const isOnline = isChannelOnline(channelKey);
+  const isMeasuring = isOnline && dev.measuring;
+  const hasData = isChannelMeasuringWithData(channelKey);
+  const pendingCmd = dev.pendingCommand;
 
-  const activeToothId = getSelectedToothForMode();
-  const activeTooth = getTooth(activeToothId);
-  const modeLabel = state.mode === "reference" ? "พื้นที่อ้างอิง (สีเขียว)" : "พื้นที่เป้าหมาย (สีส้ม)";
-  const payload = state.live.payload;
-  const isOnline = state.live.enabled && state.live.status === "online";
-  const isMeasuring = isOnline && state.live.measuring;
-  const pendingCmd = state.live.pendingCommand;
-
-  // 1. แยกสถานะการเชื่อมต่อ (Connection: Online / Offline)
   let connPillClass = "offline";
   let connPillText = "Offline";
   if (state.live.enabled) {
-    if (state.live.status === "online") {
+    if (dev.status === "online") {
       connPillClass = "online";
       connPillText = "Online";
-    } else if (state.live.status === "stale") {
+    } else if (dev.status === "stale") {
       connPillClass = "stale";
       connPillText = "สัญญาณไม่อัปเดต";
-    } else if (state.live.status === "connecting") {
+    } else if (dev.status === "connecting") {
       connPillClass = "stale";
       connPillText = "กำลังเชื่อมต่อ...";
-    } else {
-      connPillClass = "offline";
-      connPillText = "Offline";
     }
   } else {
-    connPillClass = "offline";
     connPillText = "ปิดใช้งาน";
   }
 
-  // 2. แยกสถานะการวัด (Measurement: Standby / Measuring / ไม่พร้อมวัด)
   let measurePillClass = "standby";
   let measurePillText = "ไม่พร้อมวัด";
   if (isOnline) {
     if (pendingCmd === "start") {
       measurePillClass = "pending";
-      measurePillText = "กำลังเริ่มการวัด...";
+      measurePillText = "กำลังเริ่ม...";
     } else if (pendingCmd === "stop") {
       measurePillClass = "pending";
-      measurePillText = "กำลังหยุดการวัด...";
-    } else if (state.live.measuring) {
+      measurePillText = "กำลังหยุด...";
+    } else if (dev.measuring) {
       measurePillClass = "measuring";
       measurePillText = "Measuring";
     } else {
@@ -938,27 +1121,29 @@ function updateLiveSensorCard() {
     }
   }
 
-  // 3. เมื่อ Standby หรือ Offline ให้แสดงอุณหภูมิเป็น --.-- °C แม้ Firebase ยังเก็บค่าเดิม
-  const canShowLiveTemp = isMeasuring && payload && Number.isFinite(payload.temperature);
-  const tempDisplay = canShowLiveTemp
-    ? `${payload.temperature.toFixed(2)} °${payload.unit || "C"}`
-    : "--.-- °C";
+  let valueDisplay = channelKey === "temp" ? "--.-- °C" : "-- bpm";
+  if (hasData) {
+    if (channelKey === "temp") {
+      valueDisplay = `${dev.payload.temperature.toFixed(2)} °${dev.payload.unit || "C"}`;
+    } else {
+      valueDisplay = `${Math.round(dev.payload.pulse)} ${dev.payload.unit || "bpm"}`;
+    }
+  }
 
   const lastUpdateTs = isMeasuring
-    ? payload?.timestamp
-    : (state.live.lastSeen || payload?.timestamp);
+    ? dev.payload?.timestamp
+    : (dev.lastSeen || dev.payload?.timestamp);
   const timeDisplay = lastUpdateTs
     ? new Date(lastUpdateTs).toLocaleTimeString("th-TH")
     : "ยังไม่มีข้อมูล";
 
-  // 4. ปุ่มเดียวแบบ Toggle สำหรับควบคุมการวัด (เริ่มการวัด / หยุดการวัด)
   let toggleBtnLabel = "เริ่มการวัด";
   let toggleBtnClass = "measure-toggle-btn start";
   if (pendingCmd === "start") {
-    toggleBtnLabel = "กำลังส่งคำสั่งเริ่มการวัด...";
+    toggleBtnLabel = "กำลังเริ่ม...";
     toggleBtnClass = "measure-toggle-btn pending";
   } else if (pendingCmd === "stop") {
-    toggleBtnLabel = "กำลังส่งคำสั่งหยุดการวัด...";
+    toggleBtnLabel = "กำลังหยุด...";
     toggleBtnClass = "measure-toggle-btn pending";
   } else if (isMeasuring) {
     toggleBtnLabel = "หยุดการวัด";
@@ -966,29 +1151,98 @@ function updateLiveSensorCard() {
   }
   const isToggleDisabled = !isOnline || Boolean(pendingCmd);
 
-  const extraMetrics = [];
-  if (payload?.pulse !== null && payload?.pulse !== undefined) {
-    extraMetrics.push(`ชีพจร: ${formatNumber(payload.pulse)} bpm`);
-  } else {
-    extraMetrics.push(`ชีพจร: ใช้ค่าจำลองของซี่ฟัน`);
-  }
-  if (payload?.oxygen !== null && payload?.oxygen !== undefined) {
-    extraMetrics.push(`ออกซิเจน: ${formatNumber(payload.oxygen)} %`);
-  } else {
-    extraMetrics.push(`ออกซิเจน: ใช้ค่าจำลองของซี่ฟัน`);
+  const cardStateClass = isMeasuring ? "measuring" : (isOnline ? "online" : "");
+  const valueClass = `live-temp-value ${channelKey === "pulse" ? "pulse-value" : ""} ${hasData ? "" : "standby-value"}`;
+  const errorHtml = dev.commandError
+    ? `<div class="command-error-banner" role="alert">${escapeAttr(dev.commandError)}</div>`
+    : "";
+
+  return `
+    <div class="device-module-card ${cardStateClass}">
+      <div class="device-module-head">
+        <span class="device-module-name">
+          ${meta.labelTh} (Mode ${meta.modeNumber})
+        </span>
+        <span class="device-module-id">${escapeAttr(deviceId)}</span>
+      </div>
+      <div class="device-module-pills">
+        <span class="live-pill ${connPillClass}">Connection: ${connPillText}</span>
+        <span class="live-pill ${measurePillClass}">${measurePillText}</span>
+      </div>
+      ${errorHtml}
+      <div class="device-module-reading">
+        <span class="${valueClass}">${valueDisplay}</span>
+        <button
+          class="${toggleBtnClass}"
+          type="button"
+          data-toggle-channel="${channelKey}"
+          ${isToggleDisabled ? "disabled" : ""}
+        >
+          ${toggleBtnLabel}
+        </button>
+      </div>
+      <div class="live-sub-metrics">
+        <span>ซิงก์ล่าสุด: <strong>${timeDisplay}</strong></span>
+      </div>
+    </div>
+  `;
+}
+
+function updateLiveSensorCard() {
+  if (!els.liveSensorCard) return;
+
+  const activeToothId = getSelectedToothForMode();
+  const activeTooth = getTooth(activeToothId);
+  const modeLabel = state.mode === "reference" ? "พื้นที่อ้างอิง (สีเขียว)" : "พื้นที่เป้าหมาย (สีส้ม)";
+
+  const onlineChannels = getOnlineChannels();
+  const measuringChannels = getMeasuringChannelsWithData();
+  const canApplyLiveData = measuringChannels.length > 0;
+
+  // ป้ายสรุปว่าเชื่อมต่อกับเซ็นเซอร์แบบใดอยู่ (1 ชนิด หรือ 2 ชนิดพร้อมกัน)
+  let summaryPillClass = "offline";
+  let summaryPillText = "ยังไม่พบอุปกรณ์ออนไลน์";
+  if (!state.live.enabled) {
+    summaryPillText = "ปิดรับค่า ESP32 (โหมดจำลอง)";
+  } else if (onlineChannels.length === 2) {
+    summaryPillClass = "dual";
+    summaryPillText = "เชื่อมต่อ 2 ชนิด: อุณหภูมิ + ชีพจร";
+  } else if (onlineChannels.length === 1) {
+    summaryPillClass = "";
+    const ch = onlineChannels[0];
+    summaryPillText = `เชื่อมต่อ 1 ชนิด: ${CHANNEL_META[ch].labelTh}`;
   }
 
-  const errorBannerHtml = state.live.commandError
-    ? `<div class="command-error-banner" role="alert">${escapeAttr(state.live.commandError)}</div>`
+  // แถบควบคุมพร้อมกัน 2 ตัว (แสดงเมื่อเชื่อมต่อพร้อมกัน 2 โมดูล)
+  const bothOnline = onlineChannels.length === 2;
+  const anyNotMeasuring = onlineChannels.some((ch) => !state.live.devices[ch].measuring);
+  const anyMeasuring = onlineChannels.some((ch) => state.live.devices[ch].measuring);
+  const anyPending = onlineChannels.some((ch) => Boolean(state.live.devices[ch].pendingCommand));
+
+  const batchBarHtml = bothOnline
+    ? `
+      <div class="live-batch-bar">
+        <span><strong>ควบคุมพร้อมกัน 2 โมดูล</strong> (อุณหภูมิ + ชีพจร)</span>
+        <div class="live-batch-actions">
+          <button class="primary-button small" id="startAllModulesBtn" type="button" ${!anyNotMeasuring || anyPending ? "disabled" : ""}>เริ่มวัดทั้งหมด</button>
+          <button class="secondary-button small" id="stopAllModulesBtn" type="button" ${!anyMeasuring || anyPending ? "disabled" : ""}>หยุดทั้งหมด</button>
+        </div>
+      </div>
+    `
     : "";
+
+  const activeSensorDesc = measuringChannels.length
+    ? `กำลังรับค่าสด: ${measuringChannels.map((ch) => CHANNEL_META[ch].labelTh).join(" + ")} (${measuringChannels.length} ชนิด) — ค่าที่ไม่ได้ส่งจาก ESP32 จะคงค่าจำลองของซี่ฟันไว้`
+    : (onlineChannels.length
+        ? "อุปกรณ์อยู่ในโหมด Standby กดปุ่ม 'เริ่มการวัด' บนเว็บ หรือกดปุ่มที่บอร์ด ESP32 (GPIO 18) ของโมดูลที่ต้องการ"
+        : "ESP32 ออฟไลน์หรือไม่พร้อมวัด ปุ่มเริ่มการวัดจะเปิดใช้งานเมื่อโมดูลอุณหภูมิหรือชีพจรออนไลน์");
 
   els.liveSensorCard.className = `live-sensor-card ${state.live.enabled ? "" : "disabled"}`;
   els.liveSensorCard.innerHTML = `
     <div class="live-sensor-header">
       <div class="live-sensor-title">
         <h3>สัญญาณจากอุปกรณ์ ESP32 (Firebase)</h3>
-        <span class="live-pill ${connPillClass}" title="สถานะการเชื่อมต่อ ESP32">Connection: ${connPillText}</span>
-        <span class="live-pill ${measurePillClass}" title="สถานะการวัดจาก ESP32">Measurement: ${measurePillText}</span>
+        <span class="live-summary-pill ${summaryPillClass}">${summaryPillText}</span>
       </div>
       <label class="live-toggle-wrap" for="toggleLiveFirebase">
         <input id="toggleLiveFirebase" type="checkbox" ${state.live.enabled ? "checked" : ""}>
@@ -996,26 +1250,11 @@ function updateLiveSensorCard() {
       </label>
     </div>
 
-    ${errorBannerHtml}
-
     <div class="live-sensor-body">
-      <div class="live-reading-box">
-        <div>
-          <small class="eyebrow" style="color:var(--muted);display:block;">ค่าล่าสุดจากเซ็นเซอร์ (${isMeasuring ? "กำลังวัด" : "Standby"})</small>
-          <span class="live-temp-value ${canShowLiveTemp ? "" : "standby-value"}">${tempDisplay}</span>
-        </div>
-        <button
-          class="${toggleBtnClass}"
-          id="toggleMeasureButton"
-          type="button"
-          ${isToggleDisabled ? "disabled" : ""}
-        >
-          ${toggleBtnLabel}
-        </button>
-        <div class="live-sub-metrics" style="width:100%;">
-          <span>ซิงก์ล่าสุด: <strong>${timeDisplay}</strong></span>
-          <span>${extraMetrics.join(" · ")}</span>
-        </div>
+      ${batchBarHtml}
+      <div class="dual-device-grid">
+        ${renderDeviceModuleCard("temp")}
+        ${renderDeviceModuleCard("pulse")}
       </div>
 
       <div class="live-route-box">
@@ -1023,13 +1262,7 @@ function updateLiveSensorCard() {
           <span>ซี่ฟันที่เลือกบนแผนผัง (${modeLabel}):</span>
           <strong>FDI ${activeTooth.id} (${activeTooth.nameTh})</strong>
         </div>
-        <small style="color:var(--muted);">
-          ${isOnline
-            ? (isMeasuring
-                ? "กำลังรับค่าอุณหภูมิสดจาก ESP32 ทุก 1 วินาที กดปุ่ม 'หยุดการวัด' บนเว็บ หรือกดปุ่มที่บอร์ด ESP32 (GPIO 18) เพื่อพักเป็นโหมด Standby"
-                : "อุปกรณ์อยู่ในโหมด Standby กดปุ่ม 'เริ่มการวัด' บนเว็บ หรือกดปุ่มที่บอร์ด ESP32 (GPIO 18) เพื่อเริ่มจำลองและส่งค่าอุณหภูมิ")
-            : "ESP32 ออฟไลน์หรือไม่พร้อมวัด ปุ่มเริ่มการวัดจะเปิดใช้งานเมื่อ ESP32 ออนไลน์"}
-        </small>
+        <small style="color:var(--muted);">${activeSensorDesc}</small>
       </div>
     </div>
 
@@ -1041,19 +1274,30 @@ function updateLiveSensorCard() {
         </label>
       </div>
       <div class="live-action-buttons">
-        <button class="primary-button small" id="assignToSelectedToothBtn" type="button" ${!canShowLiveTemp ? "disabled" : ""}>
+        <button class="primary-button small" id="assignToSelectedToothBtn" type="button" ${!canApplyLiveData ? "disabled" : ""}>
           นำค่านี้ไปใส่ฟัน ${activeTooth.id} (${state.mode === "reference" ? "อ้างอิง" : "เป้าหมาย"})
         </button>
-        <button class="secondary-button small" id="lockAndSwitchModeBtn" type="button" ${!canShowLiveTemp ? "disabled" : ""}>
+        <button class="secondary-button small" id="lockAndSwitchModeBtn" type="button" ${!canApplyLiveData ? "disabled" : ""}>
           ล็อกค่าฟัน ${activeTooth.id} แล้วสลับไปเลือก${state.mode === "reference" ? "เป้าหมาย" : "อ้างอิง"}
         </button>
       </div>
     </div>
   `;
 
-  els.liveSensorCard.querySelector("#toggleMeasureButton").addEventListener("click", () => {
-    sendToggleMeasurementCommand();
+  els.liveSensorCard.querySelectorAll("[data-toggle-channel]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      sendToggleMeasurementCommand(btn.dataset.toggleChannel);
+    });
   });
+
+  const startAllBtn = els.liveSensorCard.querySelector("#startAllModulesBtn");
+  if (startAllBtn) {
+    startAllBtn.addEventListener("click", () => sendBatchMeasurementCommand(true));
+  }
+  const stopAllBtn = els.liveSensorCard.querySelector("#stopAllModulesBtn");
+  if (stopAllBtn) {
+    stopAllBtn.addEventListener("click", () => sendBatchMeasurementCommand(false));
+  }
 
   els.liveSensorCard.querySelector("#toggleLiveFirebase").addEventListener("change", (e) => {
     state.live.enabled = e.target.checked;
@@ -1061,36 +1305,38 @@ function updateLiveSensorCard() {
       startFirebaseSync();
     } else {
       stopFirebaseSync();
-      state.live.status = "offline";
-      state.live.measuring = false;
-      state.live.pendingCommand = null;
+      DEVICE_CHANNELS.forEach((ch) => {
+        state.live.devices[ch].status = "offline";
+        state.live.devices[ch].measuring = false;
+        state.live.devices[ch].pendingCommand = null;
+      });
       updateUI();
     }
   });
 
   els.liveSensorCard.querySelector("#toggleAutoAssign").addEventListener("change", (e) => {
     state.live.autoAssign = e.target.checked;
-    if (state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring && state.live.payload) {
+    if (state.live.enabled && state.live.autoAssign && hasAnyMeasuringWithData()) {
       applyLivePayloadToTooth(getSelectedToothForMode(), "live");
     }
     updateUI();
   });
 
   els.liveSensorCard.querySelector("#assignToSelectedToothBtn").addEventListener("click", () => {
-    if (!canShowLiveTemp) return;
+    if (!canApplyLiveData) return;
     const targetId = getSelectedToothForMode();
-    applyLivePayloadToTooth(targetId, state.live.autoAssign && state.live.status === "online" && state.live.measuring ? "live" : "captured");
+    applyLivePayloadToTooth(targetId, state.live.autoAssign ? "live" : "captured");
     updateUI();
   });
 
   els.liveSensorCard.querySelector("#lockAndSwitchModeBtn").addEventListener("click", () => {
-    if (!canShowLiveTemp) return;
+    if (!canApplyLiveData) return;
     const currentId = getSelectedToothForMode();
     applyLivePayloadToTooth(currentId, "captured");
     const nextMode = state.mode === "reference" ? "target" : "reference";
     setMode(nextMode);
     state.live.streamingTooth = getSelectedToothForMode();
-    if (state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring) {
+    if (state.live.enabled && state.live.autoAssign && hasAnyMeasuringWithData()) {
       applyLivePayloadToTooth(state.live.streamingTooth, "live");
     }
     updateUI();
@@ -1162,14 +1408,20 @@ function measurementCard(title, toothId, data, role) {
 
 function getSourceBadgeHtml(toothId) {
   const activeSelectedTooth = getSelectedToothForMode();
-  const isLiveStreaming = state.live.enabled && state.live.autoAssign && state.live.status === "online" && state.live.measuring && toothId === activeSelectedTooth;
+  const measuringChannels = getMeasuringChannelsWithData();
+  const isLiveStreaming = state.live.enabled && state.live.autoAssign && measuringChannels.length > 0 && toothId === activeSelectedTooth;
 
   if (isLiveStreaming) {
-    return `<span class="source-badge live">● ค่าสด ESP32</span>`;
+    const label = measuringChannels.map((ch) => CHANNEL_META[ch].shortLabel).join("+");
+    return `<span class="source-badge live">● สด ESP32 (${label})</span>`;
   }
-  if (state.toothSources[toothId] === "captured" || state.toothSources[toothId] === "live") {
-    return `<span class="source-badge captured">✓ ค่าจาก ESP32</span>`;
+
+  const source = state.toothSources[toothId];
+  if (source?.sensors?.length) {
+    const label = source.sensors.map((ch) => CHANNEL_META[ch].shortLabel).join("+");
+    return `<span class="source-badge captured">✓ ESP32 (${label})</span>`;
   }
+
   return `<span class="source-badge mock">ค่าจำลอง</span>`;
 }
 
@@ -1385,6 +1637,12 @@ function clampBatteryLevel(value) {
 function loadSettings() {
   const saved = readJson(STORAGE_KEYS.settings);
   if (!saved) return structuredClone(defaultSettings);
+
+  const savedFb = saved.firebase || {};
+  const migratedTempId = savedFb.tempDeviceId !== undefined
+    ? savedFb.tempDeviceId
+    : (savedFb.deviceId || defaultSettings.firebase.tempDeviceId);
+
   return {
     ...structuredClone(defaultSettings),
     ...saved,
@@ -1398,7 +1656,8 @@ function loadSettings() {
     },
     firebase: {
       ...defaultSettings.firebase,
-      ...(saved.firebase || {})
+      ...savedFb,
+      tempDeviceId: migratedTempId
     }
   };
 }

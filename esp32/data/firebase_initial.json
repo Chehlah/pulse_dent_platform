@@ -6,11 +6,30 @@
       },
       "state": {
         "measuring": false,
+        "sensorType": "temperature",
         "lastSeen": 1795330000000
       },
       "latest": {
+        "sensorType": "temperature",
         "temperature": 36.0,
         "unit": "C",
+        "status": "online",
+        "timestamp": 1795330000000
+      }
+    },
+    "pulse-dent-02": {
+      "control": {
+        "command": "stop"
+      },
+      "state": {
+        "measuring": false,
+        "sensorType": "pulse",
+        "lastSeen": 1795330000000
+      },
+      "latest": {
+        "sensorType": "pulse",
+        "pulse": 72,
+        "unit": "bpm",
         "status": "online",
         "timestamp": 1795330000000
       }

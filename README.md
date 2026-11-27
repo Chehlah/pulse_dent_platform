@@ -54,35 +54,37 @@ PulseDent/
 │   └── pulsedent_web_design_summary.md
 │
 └── esp32/                      # โปรเจกต์เฟิร์มแวร์ ESP32 (PlatformIO / Arduino Framework)
-    ├── platformio.ini          # ตั้งค่าบอร์ด esp32dev และไลบรารี WiFiManager
-    ├── src/main.cpp            # โค้ดควบคุม Toggle Start/Stop 2 ช่องทาง (ปุ่ม GPIO 18 + Web App), ส่ง Heartbeat และส่งอุณหภูมิขึ้น Firebase
-    ├── data/firebase_initial.json # โครงสร้าง JSON เริ่มต้นสำหรับ Firebase Realtime Database
-    ├── data/firebase_rules.json   # กฎความปลอดภัย (Security Rules) สำหรับ Firebase Realtime Database
+    ├── platformio.ini          # ตั้งค่าบอร์ด esp32dev และ environment แยก esp32_temp (Mode 1) / esp32_pulse (Mode 2)
+    ├── src/main.cpp            # เฟิร์มแวร์ชุดเดียวรองรับ 2 โมดูล (SENSOR_MODE 1=Temp, 2=Pulse), Toggle Start/Stop 2 ช่องทาง และส่งค่าขึ้น Firebase
+    ├── data/firebase_initial.json # โครงสร้าง JSON เริ่มต้นสำหรับ Firebase Realtime Database (pulse-dent-01 + pulse-dent-02)
+    ├── data/firebase_rules.json   # กฎความปลอดภัย (Security Rules) รองรับทั้งเซ็นเซอร์อุณหภูมิ (°C) และชีพจร (bpm)
     └── ESP32_OPERATION_SUMMARY.md # สรุปการทำงานของเฟิร์มแวร์ ESP32
 ```
 
 ---
 
-## ✨ ฟีเจอร์หลักของ `web_app` (ESP32 + Firebase Integration)
+## ✨ ฟีเจอร์หลักของ `web_app` (Dual ESP32 + Firebase Integration)
 
-1. **การควบคุมการวัดแบบ 2 ช่องทาง และการรับค่า Real-time จาก ESP32 ผ่าน Firebase (`#liveSensorCard`):**
-   - ซิงก์ข้อมูลจาก Path `/devices/<deviceId>.json` (`control`, `state`, `latest`) ด้วยทั้ง **Server-Sent Events (SSE)** และ **HTTP Polling**
-   - สั่ง **เริ่มการวัด (Start) / หยุดการวัด (Stop)** ได้ทั้งจากปุ่มบนหน้าเว็บ (`/devices/<deviceId>/control/command.json`) และจากปุ่มกดจริงบนบอร์ด ESP32 (**GPIO 18**) โดยซิงก์สถานะ `Standby` / `Measuring` ตรงกันแบบ Real-time
-   - ตรวจสอบความสดของสัญญาณจาก `state/lastSeen` (Heartbeat ทุก 3 วินาที) และ `latest/timestamp` เพื่อแยกแสดงสถานะการเชื่อมต่อและการวัดตามจริง:
+1. **รองรับการเชื่อมต่อบอร์ด ESP32 สูงสุด 2 โมดูลพร้อมกัน (อุณหภูมิ + สัญญาณชีพจร) ผ่าน Firebase (`#liveSensorCard`):**
+   - รองรับการทำงานได้ทั้งแบบเชื่อมต่อ **1 ชนิด** (เฉพาะอุณหภูมิ หรือ เฉพาะชีพจร) และ **2 ชนิดพร้อมกัน** (อุณหภูมิ + ชีพจร) โดยแสดงป้ายสรุปชนิดเซ็นเซอร์ที่เชื่อมต่ออยู่บน Header และการ์ดสัญญาณสด
+   - ซิงก์ข้อมูลจาก Path `/devices/<tempDeviceId>.json` (`pulse-dent-01`) และ `/devices/<pulseDeviceId>.json` (`pulse-dent-02`) แยกกันอิสระด้วยทั้ง **Server-Sent Events (SSE)** และ **HTTP Polling**
+   - สั่ง **เริ่มการวัด (Start) / หยุดการวัด (Stop)** ได้แยกทีละโมดูลหรือกด **เริ่มวัดทั้งหมด / หยุดทั้งหมด** พร้อมกัน รวมถึงกดจากปุ่มจริงบนบอร์ด ESP32 (**GPIO 18**) ของแต่ละตัว
+   - ตรวจสอบความสดของสัญญาณจาก `state/lastSeen` (Heartbeat ทุก 3 วินาที) และ `latest/timestamp` แยกแต่ละโมดูล:
      - 🟢 **Online (`Measuring` / `Standby`):** มี Heartbeat หรือข้อมูลชุดใหม่อัปเดตภายใน 6 วินาทีล่าสุด
      - 🟡 **สัญญาณไม่อัปเดต (`stale`):** ข้อมูล/Heartbeat ค้างเกิน 6–12 วินาที
      - ⚪ **Offline (`ไม่พร้อมวัด`):** ข้อมูล/Heartbeat ไม่อัปเดตเกิน 12 วินาที หรือปิดการรับค่าจาก ESP32
 
 2. **การส่งค่าจาก ESP32 เข้าซี่ฟันบนแผนผัง (Interactive Dental Map):**
    - คลิกเลือกฟันซี่ใดก็ได้จาก 32 ซี่ (ระบบ FDI 11–48) ทั้งในโหมด **พื้นที่อ้างอิง (สีเขียว)** และ **พื้นที่เป้าหมาย (สีส้ม)**
-   - รองรับทั้งการกดปุ่ม **นำค่านี้ไปใส่ฟันที่เลือก**, ปุ่ม **ล็อกค่าฟันแล้วสลับโหมด** เพื่อวัดฟันอ้างอิงและฟันเป้าหมายเปรียบเทียบกัน และการเปิดโหมด **Auto-Assign (Real-time)** ขณะกำลังวัด
+   - เมื่อนำค่าเข้าซี่ฟัน ระบบจะอัปเดตเฉพาะพารามิเตอร์จากโมดูลที่กำลังวัดอยู่ (เช่น Temp อย่างเดียว, Pulse อย่างเดียว หรือ Temp + Pulse พร้อมกัน) และคงค่าจำลองของพารามิเตอร์ที่ไม่ได้ต่อไว้ พร้อมป้ายระบุแหล่งที่มา (`✓ ESP32 (Temp)`, `✓ ESP32 (Pulse)`, `✓ ESP32 (Temp+Pulse)`)
+   - รองรับทั้งการกดปุ่ม **นำค่านี้ไปใส่ฟันที่เลือก**, ปุ่ม **ล็อกค่าฟันแล้วสลับโหมด** และการเปิดโหมด **Auto-Assign (Real-time)** ขณะกำลังวัด
 
 3. **การคำนวณผลต่างและประเมินความเสี่ยงอัตโนมัติ:**
    - คำนวณผลต่างสัมบูรณ์ของอุณหภูมิ ชีพจร และออกซิเจนระหว่างฟันอ้างอิงกับฟันเป้าหมาย
    - แสดงผลการประเมิน (`ปกติ`, `เฝ้าระวัง`, `เสี่ยงสูง`) พร้อมบันทึกผลลงในตาราง **ประวัติการตรวจ (`localStorage`)**
 
 4. **การตั้งค่า (Settings):**
-   - ปรับตั้งค่า **Firebase Database URL**, **Device ID (ESP32)** และ **รอบดึงข้อมูล (ms)** ได้จากหน้าเว็บโดยตรง
+   - ปรับตั้งค่า **Firebase Database URL**, **Device ID — อุณหภูมิ (Mode 1)**, **Device ID — ชีพจร (Mode 2)** และ **รอบดึงข้อมูล (ms)** ได้จากหน้าเว็บโดยตรง
    - เปิด/ปิดข้อมูลที่แสดง, เปิด/ปิดกลุ่มฟันที่เลือกได้ และปรับเกณฑ์ประเมินความเสี่ยง (Threshold)
 
 ---

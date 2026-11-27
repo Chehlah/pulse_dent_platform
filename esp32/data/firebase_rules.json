@@ -17,6 +17,9 @@
           "measuring": {
             ".validate": "newData.isBoolean()"
           },
+          "sensorType": {
+            ".validate": "newData.isString() && (newData.val() === 'temperature' || newData.val() === 'pulse')"
+          },
           "lastSeen": {
             ".validate": "newData.isNumber() && newData.val() > 0"
           },
@@ -25,12 +28,15 @@
           }
         },
         "latest": {
-          ".write": "newData.hasChildren(['temperature', 'unit', 'timestamp'])",
+          ".write": "newData.hasChildren(['unit', 'timestamp']) && (newData.hasChild('temperature') || newData.hasChild('pulse'))",
+          "sensorType": {
+            ".validate": "newData.isString() && (newData.val() === 'temperature' || newData.val() === 'pulse')"
+          },
           "temperature": {
             ".validate": "newData.isNumber() && newData.val() >= 20 && newData.val() <= 50"
           },
           "unit": {
-            ".validate": "newData.isString() && newData.val() === 'C'"
+            ".validate": "newData.isString() && (newData.val() === 'C' || newData.val() === 'bpm')"
           },
           "status": {
             ".validate": "newData.isString()"

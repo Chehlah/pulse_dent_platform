@@ -6,7 +6,15 @@
 
 ## 1. ภาพรวมของระบบ (System Overview)
 
-บอร์ด **ESP32 (esp32dev)** เชื่อมต่อ Wi-Fi ด้วย **WiFiManager** และทำงานในระบบควบคุมการวัดแบบ **Toggle Start/Stop ได้ 2 ช่องทาง (Two-Way Control)** ทั้งจาก **ปุ่มกดจริงบนบอร์ด ESP32 (Push Button Module ที่ GPIO 18)** และจาก **ปุ่มบนหน้า Web App** ผ่าน **Firebase Realtime Database**:
+บอร์ด **ESP32 (esp32dev)** ใช้ **เฟิร์มแวร์ชุดเดียวกัน (`src/main.cpp`)** สำหรับทั้ง 2 โมดูลเซ็นเซอร์ โดยเลือกโหมดผ่านค่า `#define SENSOR_MODE` (หรือเลือก Environment ใน `platformio.ini`):
+- **`SENSOR_MODE = 1` (Temperature Module):**
+  - `DEVICE_ID = "pulse-dent-01"`, `SENSOR_TYPE = "temperature"`, Wi-Fi AP: `PulseDent-Temp-Setup`
+  - จำลองอุณหภูมิ `36.0 – 39.0 °C` (ขยับทีละ `±0.2 °C`)
+- **`SENSOR_MODE = 2` (Pulse Module):**
+  - `DEVICE_ID = "pulse-dent-02"`, `SENSOR_TYPE = "pulse"`, Wi-Fi AP: `PulseDent-Pulse-Setup`
+  - จำลองสัญญาณชีพจร `60 – 90 bpm` (ขยับทีละ `±2 bpm`)
+
+แต่ละบอร์ดเชื่อมต่อ Wi-Fi ด้วย **WiFiManager** และทำงานในระบบควบคุมการวัดแบบ **Toggle Start/Stop ได้ 2 ช่องทาง (Two-Way Control)** ทั้งจาก **ปุ่มกดจริงบนบอร์ด ESP32 (Push Button Module ที่ GPIO 18)** และจาก **ปุ่มบนหน้า Web App** ผ่าน **Firebase Realtime Database**:
 - **การต่อสาย Push Button Module แบบ 3 ขา (Active LOW):**
   - `S` (Signal) $\rightarrow$ **GPIO 18** (`pinMode(18, INPUT_PULLUP)`)
   - `+` (VCC) $\rightarrow$ **3V3**
@@ -16,25 +24,41 @@
 - ใช้ `millis()` แทน `delay()` ในการแบ่งรอบทำงานแบบ Non-blocking:
   1. **ตรวจจับการกดปุ่ม GPIO 18 (`onButtonFallingISR` + `handlePhysicalButton`)** ตลอดเวลาด้วย Hardware Interrupt และ Debounce 50 ms เมื่อกดปุ่มจะสลับสถานะ Start/Stop ทันที และซิงก์ทั้ง `control/command` และ `state/measuring` ขึ้น Firebase เพื่อให้หน้า Web App อัปเดตตรงกัน
   2. **อ่านคำสั่ง (`control/command`)** จาก Firebase ทุก **1 วินาที** เพื่อรับคำสั่งกรณีผู้ใช้กดปุ่มจากหน้า Web App
-  3. **จำลองอุณหภูมิ (36.0 – 39.0 °C ขยับทีละ ±0.2 °C) และส่งค่า (`latest`)** ทุก **1 วินาที** เฉพาะเมื่อ `isMeasuring = true` เท่านั้น
-  4. **ส่ง Heartbeat (`state/lastSeen` และ `state/measuring`)** ทุก **3 วินาที** อย่างต่อเนื่องทั้งในโหมด Standby และ Measuring เพื่อให้ Web App ตรวจสอบสถานะ Online/Offline ได้ตลอดเวลา
+  3. **จำลองและส่งค่าเซ็นเซอร์ (`latest`)** ทุก **1 วินาที** เฉพาะเมื่อ `isMeasuring = true` เท่านั้น
+  4. **ส่ง Heartbeat (`state/lastSeen`, `state/sensorType` และ `state/measuring`)** ทุก **3 วินาที** อย่างต่อเนื่องทั้งในโหมด Standby และ Measuring เพื่อให้ Web App ตรวจสอบสถานะ Online/Offline และชนิดเซ็นเซอร์ได้ตลอดเวลา
 
 ---
 
 ## 2. โครงสร้างข้อมูลใน Firebase Realtime Database
 
 ```text
-devices/pulse-dent-01/
-├── control/
-│   └── command: "stop" | "start"
-├── state/
-│   ├── measuring: false | true
-│   └── lastSeen: timestamp
-└── latest/
-    ├── temperature: 36.0
-    ├── unit: "C"
-    ├── status: "online"
-    └── timestamp: timestamp
+devices/
+├── pulse-dent-01/                   # Mode 1: Temperature Sensor
+│   ├── control/
+│   │   └── command: "stop" | "start"
+│   ├── state/
+│   │   ├── measuring: false | true
+│   │   ├── sensorType: "temperature"
+│   │   └── lastSeen: timestamp
+│   └── latest/
+│       ├── sensorType: "temperature"
+│       ├── temperature: 36.0
+│       ├── unit: "C"
+│       ├── status: "online"
+│       └── timestamp: timestamp
+└── pulse-dent-02/                   # Mode 2: Pulse Sensor
+    ├── control/
+    │   └── command: "stop" | "start"
+    ├── state/
+    │   ├── measuring: false | true
+    │   ├── sensorType: "pulse"
+    │   └── lastSeen: timestamp
+    └── latest/
+        ├── sensorType: "pulse"
+        ├── pulse: 72
+        ├── unit: "bpm"
+        ├── status: "online"
+        └── timestamp: timestamp
 ```
 
 - **Web App** เขียนคำสั่ง `"start"` หรือ `"stop"` ไปที่ `control/command`
@@ -86,21 +110,31 @@ flowchart TD
 - **Hardware Interrupt (`IRAM_ATTR onButtonFallingISR`)**: ทำงานในหน่วยความจำ IRAM ทันทีที่แรงดันที่ขา GPIO 18 ตกจาก `HIGH` เป็น `LOW` (`FALLING` edge) แม้ในขณะนั้นบอร์ดจะกำลังรอ HTTPS Response จาก Firebase อยู่ พร้อมตัวล็อกกันสัญญาณกระเพื่อมเบื้องต้น (`ISR_LOCKOUT_MS = 200 ms`)
 - **Digital Debounce & State Sync (`handlePhysicalButton`)**: ตรวจสอบทั้งแฟล็ก `buttonInterruptPending` จาก Interrupt และการอ่านค่า `digitalRead(18)` แบบ Debounce `50 ms` ร่วมกัน เมื่อตรวจพบการกดปุ่มจะเรียก `applyMeasurementState(!isMeasuring, true)` เพื่อสลับสถานะ Start/Stop และอัปเดตทั้ง `control/command` และ `state/measuring` บน Firebase ทันที
 
-### 4.3 การจำลองค่าอุณหภูมิ (`simulateNextTemperature()`)
-- เริ่มต้นที่ `36.0 °C` และเปลี่ยนแปลงรอบละ `0.2 °C`
-- **ขาขึ้น:** เพิ่มทีละ `+0.2 °C` จนถึง `39.0 °C`
-- **ขาลง:** เมื่อแตะ `39.0 °C` จะสลับเป็นลดลงทีละ `-0.2 °C` จนกลับมาที่ `36.0 °C` แล้วสลับขึ้นใหม่วนไปเรื่อย ๆ
+### 4.3 การจำลองค่าเซ็นเซอร์ (`simulateNextSensorValue()`)
+- **Mode 1 (Temperature):** เริ่มต้นที่ `36.0 °C` เพิ่มทีละ `+0.2 °C` จนถึง `39.0 °C` แล้วลดลงทีละ `-0.2 °C` วนไปเรื่อย ๆ
+- **Mode 2 (Pulse):** เริ่มต้นที่ `72 bpm` เพิ่มทีละ `+2 bpm` จนถึง `90 bpm` แล้วลดลงทีละ `-2 bpm` จนถึง `60 bpm` วนไปเรื่อย ๆ
 
-### 4.4 การส่งข้อมูลไปยัง Firebase (`sendTemperature()`)
+### 4.4 การส่งข้อมูลไปยัง Firebase (`sendSensorData()`)
 เมื่อ Wi-Fi เชื่อมต่ออยู่ (`WL_CONNECTED`) บอร์ดจะส่งข้อมูลผ่าน HTTPS (`WiFiClientSecure` + `HTTPClient`):
 - **Method:** `HTTP PUT` (เขียนทับข้อมูลล่าสุดที่ตำแหน่งเดิม ไม่สร้างรายการซ้ำ)
 - **Database URL:** `https://pulsedent-02-default-rtdb.asia-southeast1.firebasedatabase.app`
-- **Target Path:** `/devices/pulse-dent-01/latest.json`
-- **รูปแบบ JSON ที่ส่ง:**
+- **Target Path:** `/devices/<DEVICE_ID>/latest.json` (`pulse-dent-01` สำหรับ Mode 1 หรือ `pulse-dent-02` สำหรับ Mode 2)
+- **รูปแบบ JSON ที่ส่ง (Mode 1 — Temperature):**
   ```json
   {
+    "sensorType": "temperature",
     "temperature": 36.20,
     "unit": "C",
+    "status": "online",
+    "timestamp": {".sv": "timestamp"}
+  }
+  ```
+- **รูปแบบ JSON ที่ส่ง (Mode 2 — Pulse):**
+  ```json
+  {
+    "sensorType": "pulse",
+    "pulse": 74,
+    "unit": "bpm",
     "status": "online",
     "timestamp": {".sv": "timestamp"}
   }

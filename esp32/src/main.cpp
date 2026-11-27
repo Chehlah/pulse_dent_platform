@@ -4,9 +4,30 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+// ============================================================================
+// กำหนดโหมดเซ็นเซอร์ของบอร์ด ESP32 (ใช้โค้ดชุดเดียวกันได้ทั้ง 2 โมดูล)
+//   1 = Temperature Sensor (Device ID: pulse-dent-01)
+//   2 = Pulse Sensor       (Device ID: pulse-dent-02)
+// สามารถเปลี่ยนค่าด้านล่าง หรือเลือก environment ใน platformio.ini (esp32_temp / esp32_pulse)
+// ============================================================================
+#ifndef SENSOR_MODE
+#define SENSOR_MODE 1
+#endif
+
+#if SENSOR_MODE == 1
+const char* DEVICE_ID   = "pulse-dent-01";
+const char* SENSOR_TYPE = "temperature";
+const char* AP_SSID     = "PulseDent-Temp-Setup";
+#elif SENSOR_MODE == 2
+const char* DEVICE_ID   = "pulse-dent-02";
+const char* SENSOR_TYPE = "pulse";
+const char* AP_SSID     = "PulseDent-Pulse-Setup";
+#else
+#error "Invalid SENSOR_MODE: please set SENSOR_MODE to 1 (Temperature) or 2 (Pulse)"
+#endif
+
 // เปลี่ยนเป็น Realtime Database URL จริงของโปรเจกต์คุณ (ไม่ต้องมี / ปิดท้าย)
 const char* DATABASE_URL = "https://pulsedent-02-default-rtdb.asia-southeast1.firebasedatabase.app";
-const char* DEVICE_ID = "pulse-dent-01";
 
 // หากเปิดใช้ Firebase Authentication ให้กำหนด ID Token ที่ได้รับจากการล็อกอินที่นี่ (ห้ามฝัง Admin Secret ในโค้ด)
 String firebaseIdToken = "";
@@ -32,15 +53,23 @@ void IRAM_ATTR onButtonFallingISR() {
     }
 }
 
-// สถานะการวัดและตัวแปรจำลองอุณหภูมิ (36.0 - 39.0 C, ขยับทีละ +-0.2 C)
+// สถานะการวัดและตัวแปรจำลองค่าเซ็นเซอร์
 bool isMeasuring = false;
 bool isStartupInitialized = false;
 bool pendingButtonCommandSync = false; // ใช้กรณีเปลี่ยนสถานะด้วยปุ่มตอน Wi-Fi ยังไม่พร้อม หรือต้องการซิงก์ซ้ำ
+
+#if SENSOR_MODE == 1
+// จำลองอุณหภูมิ (36.0 - 39.0 C, ขยับทีละ +-0.2 C)
 float temperature = 36.0;
-float step = 0.2;
+float tempStep = 0.2;
+#elif SENSOR_MODE == 2
+// จำลองสัญญาณชีพจรของฟัน (60 - 90 bpm, ขยับทีละ +-2 bpm)
+int pulseBpm = 72;
+int pulseStep = 2;
+#endif
 
 // การกำหนดรอบเวลาด้วย millis() แทน delay()
-const unsigned long MEASURE_INTERVAL_MS   = 1000; // จำลองและส่งอุณหภูมิทุก 1 วินาที (เมื่อ isMeasuring = true)
+const unsigned long MEASURE_INTERVAL_MS   = 1000; // จำลองและส่งค่าเซ็นเซอร์ทุก 1 วินาที (เมื่อ isMeasuring = true)
 const unsigned long COMMAND_POLL_MS       = 1000; // อ่านคำสั่ง Start/Stop จาก Firebase ทุก 1 วินาที
 const unsigned long HEARTBEAT_INTERVAL_MS = 3000; // ส่ง Heartbeat (lastSeen) ทุก 3 วินาที
 const unsigned long WIFI_RETRY_MS         = 5000; // ตรวจสอบและกู้คืน Wi-Fi ทุก 5 วินาทีเมื่อหลุด
@@ -120,27 +149,40 @@ String firebaseGetRaw(const String& subPath, int* outHttpCode = nullptr) {
     return payload;
 }
 
-// ส่งค่าอุณหภูมิไปยัง latest (เรียกเฉพาะเมื่อ isMeasuring = true)
-void sendTemperature(float temp) {
+// ส่งค่าเซ็นเซอร์ไปยัง latest ตาม SENSOR_MODE (เรียกเฉพาะเมื่อ isMeasuring = true)
+void sendSensorData() {
     String json = "{";
-    json += "\"temperature\":" + String(temp, 2);
+    json += "\"sensorType\":\"" + String(SENSOR_TYPE) + "\"";
+#if SENSOR_MODE == 1
+    json += ",\"temperature\":" + String(temperature, 2);
     json += ",\"unit\":\"C\"";
+#elif SENSOR_MODE == 2
+    json += ",\"pulse\":" + String(pulseBpm);
+    json += ",\"unit\":\"bpm\"";
+#endif
     json += ",\"status\":\"online\"";
     json += ",\"timestamp\":{\".sv\":\"timestamp\"}";
     json += "}";
 
     bool ok = firebasePutJson("latest", json);
+#if SENSOR_MODE == 1
     Serial.print("Send temperature (");
-    Serial.print(temp, 2);
+    Serial.print(temperature, 2);
     Serial.print(" C) -> ");
+#elif SENSOR_MODE == 2
+    Serial.print("Send pulse (");
+    Serial.print(pulseBpm);
+    Serial.print(" bpm) -> ");
+#endif
     Serial.println(ok ? "OK" : "FAILED");
 }
 
-// ส่งสถานะการวัดจริง (state/measuring) และ Heartbeat (state/lastSeen)
+// ส่งสถานะการวัดจริง (state/measuring), ชนิดเซ็นเซอร์ (state/sensorType) และ Heartbeat (state/lastSeen)
 bool syncDeviceState() {
     String json = "{";
     json += "\"measuring\":";
     json += (isMeasuring ? "true" : "false");
+    json += ",\"sensorType\":\"" + String(SENSOR_TYPE) + "\"";
     json += ",\"lastSeen\":{\".sv\":\"timestamp\"}";
     json += "}";
 
@@ -178,9 +220,9 @@ void applyMeasurementState(bool newState, bool triggeredByPhysicalButton) {
         lastHeartbeatMillis = now;
         lastCommandMillis   = now;
 
-        // หากเริ่มวัด ให้ส่งค่าอุณหภูมิชุดแรกทันที
+        // หากเริ่มวัด ให้ส่งค่าเซ็นเซอร์ชุดแรกทันที
         if (isMeasuring) {
-            sendTemperature(temperature);
+            sendSensorData();
             lastMeasureMillis = now;
         }
     } else if (triggeredByPhysicalButton) {
@@ -287,18 +329,32 @@ void pollControlCommand() {
     }
 }
 
-void simulateNextTemperature() {
-    temperature += step;
+void simulateNextSensorValue() {
+#if SENSOR_MODE == 1
+    temperature += tempStep;
 
     if (temperature >= 39.0) {
         temperature = 39.0;
-        step = -0.2;
+        tempStep = -0.2;
     }
 
     if (temperature <= 36.0) {
         temperature = 36.0;
-        step = 0.2;
+        tempStep = 0.2;
     }
+#elif SENSOR_MODE == 2
+    pulseBpm += pulseStep;
+
+    if (pulseBpm >= 90) {
+        pulseBpm = 90;
+        pulseStep = -2;
+    }
+
+    if (pulseBpm <= 60) {
+        pulseBpm = 60;
+        pulseStep = 2;
+    }
+#endif
 }
 
 void setup() {
@@ -311,7 +367,12 @@ void setup() {
     lastDebounceTime  = millis();
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonFallingISR, FALLING);
 
-    Serial.println("Pulse Dent 02");
+    Serial.print("Pulse Dent 02 — Mode ");
+    Serial.print(SENSOR_MODE);
+    Serial.print(" (");
+    Serial.print(SENSOR_TYPE);
+    Serial.print(") | Device ID: ");
+    Serial.println(DEVICE_ID);
     Serial.println("Physical Button configured on GPIO 18 (INPUT_PULLUP + Hardware Interrupt FALLING, Debounce 50 ms)");
     Serial.println("Starting WiFi Manager...");
 
@@ -325,7 +386,7 @@ void setup() {
     wm.setConfigPortalTimeout(180);
 
     bool connected = wm.autoConnect(
-        "PulseDent-Setup",
+        AP_SSID,
         "pulsedent02"
     );
 
@@ -390,16 +451,16 @@ void loop() {
         handlePhysicalButton(); // ตรวจปุ่มกดซ้ำทันทีหลังจบ HTTP request
     }
 
-    // 3. จำลองและส่งอุณหภูมิทุก 1 วินาที เฉพาะเมื่อ isMeasuring = true เท่านั้น
+    // 3. จำลองและส่งค่าเซ็นเซอร์ทุก 1 วินาที เฉพาะเมื่อ isMeasuring = true เท่านั้น
     now = millis();
     if (isMeasuring && (now - lastMeasureMillis >= MEASURE_INTERVAL_MS)) {
         lastMeasureMillis = now;
-        simulateNextTemperature();
-        sendTemperature(temperature);
+        simulateNextSensorValue();
+        sendSensorData();
         handlePhysicalButton(); // ตรวจปุ่มกดซ้ำทันทีหลังจบ HTTP request
     }
 
-    // 4. ส่ง Heartbeat (state/lastSeen และ state/measuring) ต่อเนื่องแม้ในโหมด Standby
+    // 4. ส่ง Heartbeat (state/lastSeen, state/sensorType และ state/measuring) ต่อเนื่องแม้ในโหมด Standby
     now = millis();
     if (now - lastHeartbeatMillis >= HEARTBEAT_INTERVAL_MS) {
         lastHeartbeatMillis = now;
@@ -408,7 +469,9 @@ void loop() {
         } else {
             bool hbOk = syncDeviceState();
             if (hbOk) {
-                Serial.print("Heartbeat sent [mode: ");
+                Serial.print("Heartbeat sent [");
+                Serial.print(SENSOR_TYPE);
+                Serial.print(" | mode: ");
                 Serial.print(isMeasuring ? "Measuring" : "Standby");
                 Serial.println("]");
             }
@@ -416,4 +479,3 @@ void loop() {
         handlePhysicalButton();
     }
 }
-
