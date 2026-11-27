@@ -68,9 +68,9 @@ flowchart TD
 
 ---
 
-## 3. รายละเอียดการทำงานแต่ละส่วน
+## 4. รายละเอียดการทำงานแต่ละส่วน
 
-### 3.1 การตั้งค่าเริ่มต้นและการเชื่อมต่อ Wi-Fi (`setup()`)
+### 4.1 การตั้งค่าเริ่มต้นและการเชื่อมต่อ Wi-Fi (`setup()`)
 1. เริ่มต้นพอร์ตสื่อสาร `Serial` ที่ความเร็ว **115200 baud**
 2. ตั้งค่าขาปุ่มกด **GPIO 18** เป็น `INPUT_PULLUP` พร้อมผูก **Hardware Interrupt** (`attachInterrupt(digitalPinToInterrupt(18), onButtonFallingISR, FALLING)`) เพื่อดักจับจังหวะกดปุ่มในระดับฮาร์ดแวร์ได้ตลอดเวลา
 3. เรียกใช้ไลบรารี `WiFiManager`:
@@ -80,18 +80,18 @@ flowchart TD
      - **รหัสผ่าน:** `pulsedent02`
      - **เวลาจำกัดในการตั้งค่า:** **180 วินาที (3 นาที)** (`wm.setConfigPortalTimeout(180)`)
    - หากเชื่อมต่อสำเร็จ จะแสดงชื่อ Wi-Fi (`SSID`) และ `IP Address` ออกทาง Serial Monitor
-   - หากครบ 3 นาทีแล้วยังไม่ได้ตั้งค่า บอร์ดจะแสดง `Running offline...` และทำงานต่อใน `loop()` โดยไม่ค้าง
+   - หากครบ 3 นาทีแล้วยังไม่ได้ตั้งค่า บอร์ดจะแสดง `Running offline (will auto-reconnect in background)...` และทำงานต่อใน `loop()` โดยไม่ค้าง
 
-### 3.2 ระบบตรวจจับการกดปุ่มจริงบนบอร์ด (`onButtonFallingISR()` และ `handlePhysicalButton()`)
+### 4.2 ระบบตรวจจับการกดปุ่มจริงบนบอร์ด (`onButtonFallingISR()` และ `handlePhysicalButton()`)
 - **Hardware Interrupt (`IRAM_ATTR onButtonFallingISR`)**: ทำงานในหน่วยความจำ IRAM ทันทีที่แรงดันที่ขา GPIO 18 ตกจาก `HIGH` เป็น `LOW` (`FALLING` edge) แม้ในขณะนั้นบอร์ดจะกำลังรอ HTTPS Response จาก Firebase อยู่ พร้อมตัวล็อกกันสัญญาณกระเพื่อมเบื้องต้น (`ISR_LOCKOUT_MS = 200 ms`)
 - **Digital Debounce & State Sync (`handlePhysicalButton`)**: ตรวจสอบทั้งแฟล็ก `buttonInterruptPending` จาก Interrupt และการอ่านค่า `digitalRead(18)` แบบ Debounce `50 ms` ร่วมกัน เมื่อตรวจพบการกดปุ่มจะเรียก `applyMeasurementState(!isMeasuring, true)` เพื่อสลับสถานะ Start/Stop และอัปเดตทั้ง `control/command` และ `state/measuring` บน Firebase ทันที
 
-### 3.3 การจำลองค่าอุณหภูมิ (`loop()`)
+### 4.3 การจำลองค่าอุณหภูมิ (`simulateNextTemperature()`)
 - เริ่มต้นที่ `36.0 °C` และเปลี่ยนแปลงรอบละ `0.2 °C`
 - **ขาขึ้น:** เพิ่มทีละ `+0.2 °C` จนถึง `39.0 °C`
 - **ขาลง:** เมื่อแตะ `39.0 °C` จะสลับเป็นลดลงทีละ `-0.2 °C` จนกลับมาที่ `36.0 °C` แล้วสลับขึ้นใหม่วนไปเรื่อย ๆ
 
-### 3.4 การส่งข้อมูลไปยัง Firebase (`sendTemperature()`)
+### 4.4 การส่งข้อมูลไปยัง Firebase (`sendTemperature()`)
 เมื่อ Wi-Fi เชื่อมต่ออยู่ (`WL_CONNECTED`) บอร์ดจะส่งข้อมูลผ่าน HTTPS (`WiFiClientSecure` + `HTTPClient`):
 - **Method:** `HTTP PUT` (เขียนทับข้อมูลล่าสุดที่ตำแหน่งเดิม ไม่สร้างรายการซ้ำ)
 - **Database URL:** `https://pulsedent-02-default-rtdb.asia-southeast1.firebasedatabase.app`
@@ -109,7 +109,7 @@ flowchart TD
 
 ---
 
-## 4. ตัวอย่างผลลัพธ์ทาง Serial Monitor
+## 5. ตัวอย่างผลลัพธ์ทาง Serial Monitor
 
 เมื่อเชื่อมต่อ Wi-Fi และส่งข้อมูลเข้า Firebase สำเร็จ (`HTTP status: 200`):
 
@@ -138,7 +138,7 @@ Heartbeat sent [mode: Measuring]
 
 ---
 
-## 5. โครงสร้างไฟล์และไลบรารีที่ใช้
+## 6. โครงสร้างไฟล์และไลบรารีที่ใช้
 
 - **[`platformio.ini`](platformio.ini)**
   - Board: `esp32dev` (Espressif 32, Arduino Framework)
@@ -146,3 +146,4 @@ Heartbeat sent [mode: Measuring]
   - Built-in Libraries: `WiFi.h`, `HTTPClient.h`, `WiFiClientSecure.h`
 - **[`src/main.cpp`](src/main.cpp)** — โค้ดหลักของเฟิร์มแวร์ ESP32
 - **[`data/firebase_initial.json`](data/firebase_initial.json)** — ไฟล์โครงสร้าง JSON เริ่มต้นสำหรับ Import เข้า Firebase
+- **[`data/firebase_rules.json`](data/firebase_rules.json)** — กฎความปลอดภัย (Security Rules) สำหรับ Firebase Realtime Database

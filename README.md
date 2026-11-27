@@ -41,6 +41,7 @@ PulseDent/
 │   ├── script.js               # ลอจิกซิงก์ Firebase (SSE + Polling), ตรวจสถานะ ESP32 และประมวลผล
 │   ├── tooth_01.jpg            # ภาพแผนผังฟัน 32 ซี่
 │   ├── tooth_02.jpg            # ภาพอ้างอิงชนิดฟัน
+│   ├── demo_landing_page.jpg   # ภาพตัวอย่างหน้าแรกของแพลตฟอร์ม
 │   └── pulsedent_web_design_summary.md # เอกสารสรุปการออกแบบและการทำงานของ web_app
 │
 ├── web_demo/                   # เว็บแอปรุ่นสาธิต (Simulation Mode ล้วน ไม่ต้องต่อฮาร์ดแวร์)
@@ -49,6 +50,7 @@ PulseDent/
 │   ├── script.js
 │   ├── tooth_01.jpg
 │   ├── tooth_02.jpg
+│   ├── demo_landing_page.jpg
 │   └── pulsedent_web_design_summary.md
 │
 └── esp32/                      # โปรเจกต์เฟิร์มแวร์ ESP32 (PlatformIO / Arduino Framework)
